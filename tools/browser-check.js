@@ -101,12 +101,16 @@ server.listen(0, '127.0.0.1', async () => {
     check('parkedCarsPresent', results.parkedCount >= 30);
     // Step next to the nearest parked car (debug handle places the player;
     // walking itself is already covered by the S1 walk above), then press E.
-    const parkedAt = await evaluate(`(() => { const v = CoralGame.vehicles; const p = CoralGame.state.player; const c = v.cars.filter(c => !c.ai).sort((a, b) => Math.hypot(a.x - p.x, a.y - p.y) - Math.hypot(b.x - p.x, b.y - p.y))[0]; p.x = c.x + 30; p.y = c.y; return [Math.round(c.x), Math.round(c.y), c.type.id]; })()`);
+    // Clear passing traffic first: an AI car crossing the staging spot
+    // would win the 42 m enter range over the intended parked car, and a
+    // fast one can bounce off an obstacle and read a negative speed.
+    await evaluate(`(() => { const v = CoralGame.vehicles; v.cars.forEach(c => { if (c.ai) { c.x = 260; c.y = 2230; c.speed = 0; c.target = null; } }); return true; })()`);
+    const parkedAt = await evaluate(`(() => { const v = CoralGame.vehicles; const p = CoralGame.state.player; const c = v.cars.filter(c => !c.ai).sort((a, b) => Math.hypot(a.x - p.x, a.y - p.y) - Math.hypot(b.x - p.x, b.y - p.y))[0]; p.x = c.x + 30; p.y = c.y; return [Math.round(c.x), Math.round(c.y), c.type.id, c.id]; })()`);
     results.nearestParked = parkedAt;
     await delay(200);
     await tap('KeyE');
     await delay(300);
-    check('enterParkedCar', await evaluate('!!CoralGame.vehicles.playerCar'));
+    check('enterParkedCar', await evaluate(`!!CoralGame.vehicles.playerCar && CoralGame.vehicles.playerCar.id===${parkedAt[3]}`));
     results.enteredType = await evaluate('CoralGame.vehicles.playerCar && CoralGame.vehicles.playerCar.type.id');
     // Drive forward with real keys and confirm the car actually moves.
     const driveStart = await evaluate('[CoralGame.state.player.x, CoralGame.state.player.y]');
