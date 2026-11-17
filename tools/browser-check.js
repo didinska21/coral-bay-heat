@@ -101,10 +101,13 @@ server.listen(0, '127.0.0.1', async () => {
     check('parkedCarsPresent', results.parkedCount >= 30);
     // Step next to the nearest parked car (debug handle places the player;
     // walking itself is already covered by the S1 walk above), then press E.
-    // Clear passing traffic first: an AI car crossing the staging spot
+    // Clear passing traffic NEAR the staging spot: an AI car crossing it
     // would win the 42 m enter range over the intended parked car, and a
-    // fast one can bounce off an obstacle and read a negative speed.
-    await evaluate(`(() => { const v = CoralGame.vehicles; v.cars.forEach(c => { if (c.ai) { c.x = 260; c.y = 2230; c.speed = 0; c.target = null; } }); return true; })()`);
+    // fast one can bounce off an obstacle and read a negative speed. Only
+    // cars within 90 m are moved, and only 130 m along the road — they stay
+    // in the district and keep driving, so the trafficMoves check below
+    // still sees them (teleporting the whole fleet across the map broke it).
+    await evaluate(`(() => { const g = CoralGame, p = g.state.player; g.vehicles.cars.forEach(c => { if (c.ai && Math.hypot(c.x - p.x, c.y - p.y) < 90) { const r = g.world.nearestRoad(p.x + 130, p.y); c.x = r.x; c.y = r.y; c.speed = 0; c.target = null; } }); return true; })()`);
     const parkedAt = await evaluate(`(() => { const v = CoralGame.vehicles; const p = CoralGame.state.player; const c = v.cars.filter(c => !c.ai).sort((a, b) => Math.hypot(a.x - p.x, a.y - p.y) - Math.hypot(b.x - p.x, b.y - p.y))[0]; p.x = c.x + 30; p.y = c.y; return [Math.round(c.x), Math.round(c.y), c.type.id, c.id]; })()`);
     results.nearestParked = parkedAt;
     await delay(200);
