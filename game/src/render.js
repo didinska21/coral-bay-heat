@@ -1,141 +1,223 @@
-// Drawing only: the world's state and the current screen in, pixels out. The 1280x720 playfield
-// is scaled to fit the window and centred, the margin filled with the backdrop colour. Flat
-// rectangles and circles, canvas text for the HUD and the panels. Text that holds a number is
-// rebuilt only when the number changes, so a frame allocates nothing.
-import { FIELD, FONT, LIVES, PALETTE } from './config.js';
-import { KIND_COIN } from './world.js';
-
-export const SCREEN_TITLE = 'title';
-export const SCREEN_PLAY = 'play';
-export const SCREEN_PAUSED = 'paused';
-export const SCREEN_OVER = 'over';
-
-/** The panel's width; its height grows with its lines: room for the title, the lines and the prompt. */
-const PANEL = { width: 600, top: 134, line: 34, bottom: 70 };
-const LIFE_SIZE = 20;
-const LIFE_GAP = 8;
-
-function cachedLabel(prefix) {
-  let value = -1;
-  let text = '';
-  return function label(next) {
-    if (next !== value) {
-      value = next;
-      text = prefix + next;
+/* Drawing only: the city, the player and the screens, painted from the world
+   and the game state. Camera follows the player 1:1 (world units = CSS pixels)
+   with a smooth lerp; day/night shading comes from the state's day fraction. */
+var CoralRender = (function () {
+  var cfg = GAME_CONFIG, TAU = Math.PI * 2;
+  function create(canvas) {
+    var ctx = canvas.getContext('2d');
+    var view = { x: 0, y: 0, scale: 1, width: 0, height: 0 };
+    function resize() {
+      var dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(window.innerWidth * dpr);
+      canvas.height = Math.round(window.innerHeight * dpr);
+      view.width = canvas.width / dpr;
+      view.height = canvas.height / dpr;
+      view.scale = dpr;
     }
-    return text;
-  };
-}
-
-export function createRenderer(canvas) {
-  const context = canvas.getContext('2d');
-  const view = { scale: 1, x: 0, y: 0 };
-  const scoreLabel = cachedLabel('Score ');
-  const levelLabel = cachedLabel('Level ');
-  const finalLabel = cachedLabel('Score ');
-  const bestLabel = cachedLabel('Best ');
-
-  function resize() {
-    const ratio = window.devicePixelRatio || 1;
-    const width = Math.round(window.innerWidth * ratio);
-    const height = Math.round(window.innerHeight * ratio);
-    canvas.width = width;
-    canvas.height = height;
-    view.scale = Math.min(width / FIELD.width, height / FIELD.height);
-    view.x = (width - FIELD.width * view.scale) / 2;
-    view.y = (height - FIELD.height * view.scale) / 2;
-  }
-
-  const fonts = new Map();
-  function text(value, x, y, size, color, align) {
-    if (!fonts.has(size)) fonts.set(size, `${size}px ${FONT}`);
-    context.font = fonts.get(size);
-    context.fillStyle = color;
-    context.textAlign = align;
-    context.fillText(value, x, y);
-  }
-
-  function drawField(state) {
-    context.fillStyle = PALETTE.sky;
-    context.fillRect(0, 0, FIELD.width, FIELD.height);
-    context.fillStyle = PALETTE.ground;
-    context.fillRect(0, FIELD.groundY, FIELD.width, FIELD.height - FIELD.groundY);
-
-    const items = state.items;
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      if (!item.active) continue;
-      if (item.kind === KIND_COIN) {
-        context.fillStyle = PALETTE.coin;
-        context.beginPath();
-        context.arc(item.x + item.width / 2, item.y + item.height / 2, item.width / 2, 0, Math.PI * 2);
-        context.fill();
-      } else {
-        context.fillStyle = PALETTE.block;
-        context.fillRect(item.x, item.y, item.width, item.height);
+    function roundRect(x, y, w, h, r, fill) {
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, r);
+      ctx.fill();
+    }
+    function text(value, x, y, size, color, weight) {
+      ctx.font = (weight || 500) + ' ' + size + 'px system-ui, sans-serif';
+      ctx.fillStyle = color;
+      ctx.textAlign = 'left';
+      ctx.fillText(value, x, y);
+    }
+    function worldDraw(world, state) {
+      var px = state.player.x, py = state.player.y;
+      var vw = view.width, vh = view.height;
+      /* Camera target: player centred, clamped to the city edges. */
+      var tx = Math.max(0, Math.min(cfg.city.width - vw, px - vw * 0.5));
+      var ty = Math.max(0, Math.min(cfg.city.height - vh, py - vh * 0.5));
+      view.x += (tx - view.x) * Math.min(1, state.dt * cfg.camera.follow);
+      view.y += (ty - view.y) * Math.min(1, state.dt * cfg.camera.follow);
+      ctx.save();
+      ctx.scale(view.scale, view.scale);
+      ctx.translate(-view.x, -view.y);
+      /* Ground, beach and sea to the east. */
+      ctx.fillStyle = '#dfc58c';
+      ctx.fillRect(0, 0, cfg.city.width, cfg.city.height);
+      ctx.fillStyle = cfg.palette.water;
+      ctx.fillRect(cfg.city.width - cfg.city.beach, 0, cfg.city.beach, cfg.city.height);
+      ctx.fillStyle = cfg.palette.deepWater;
+      ctx.fillRect(cfg.city.width - 27, 0, 27, cfg.city.height);
+      var wave;
+      for (wave = 0; wave < 22; wave++) {
+        var wy = (wave * 117 + 36) % cfg.city.height;
+        ctx.strokeStyle = 'rgba(224,247,226,.25)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(3040, wy);
+        ctx.bezierCurveTo(3080, wy - 12, 3120, wy + 12, 3180, wy);
+        ctx.stroke();
+      }
+      /* City walls on the north, west and south edges — a visible reason the
+         map ends instead of an invisible wall. */
+      ctx.fillStyle = '#7e6f51';
+      ctx.fillRect(0, 0, 22, cfg.city.height);
+      ctx.fillRect(0, 0, cfg.city.width, 22);
+      ctx.fillRect(0, cfg.city.height - 22, cfg.city.width, 22);
+      /* Mangrove ground in the south-west. */
+      ctx.fillStyle = '#4a6452';
+      ctx.fillRect(0, 1170, 1270, 1220);
+      /* Roads: verticals first, then horizontals (dirt in the mangroves). */
+      ctx.fillStyle = cfg.palette.road;
+      world.roadsX.forEach(function (x) { ctx.fillRect(x - cfg.city.road / 2, 0, cfg.city.road, cfg.city.height); });
+      world.roadsY.forEach(function (y) {
+        var dirt = y > 1170 && world.districtAt(300, y).name === 'Mangrove Outskirts';
+        ctx.fillStyle = dirt ? '#a58a61' : cfg.palette.road;
+        ctx.fillRect(0, y - cfg.city.road / 2, cfg.city.width - cfg.city.beach, cfg.city.road);
+      });
+      /* Centre dashes along every road. */
+      ctx.strokeStyle = 'rgba(245,220,159,.42)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([16, 17]);
+      world.roadsX.forEach(function (x) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, cfg.city.height); ctx.stroke();
+      });
+      world.roadsY.forEach(function (y) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cfg.city.width - cfg.city.beach, y); ctx.stroke();
+      });
+      ctx.setLineDash([]);
+      /* Marina piers. */
+      world.piers.forEach(function (p) {
+        ctx.fillStyle = '#987651';
+        ctx.fillRect(p.x, p.y, p.w, p.h);
+        ctx.fillStyle = '#c6a273';
+        for (var q = 0; q < p.h; q += 36) ctx.fillRect(p.x - 3, p.y + q, p.w + 6, 7);
+      });
+      /* Mangrove trees. */
+      world.mangroves.forEach(function (tree) {
+        ctx.fillStyle = '#354d42';
+        ctx.beginPath(); ctx.arc(tree.x + 4, tree.y + 5, 13 * tree.size, 0, TAU); ctx.fill();
+        ctx.fillStyle = '#66835b';
+        ctx.beginPath(); ctx.arc(tree.x, tree.y, 11 * tree.size, 0, TAU); ctx.fill();
+      });
+      /* Buildings: shadow first (it leans with the time of day), then the
+         block, roof, lit windows and the shop sign where there is one. */
+      world.buildings.forEach(function (b) {
+        var shadowX = 12 + Math.cos(state.day * TAU) * 24;
+        var shadowY = 10 + Math.sin(state.day * TAU) * 19;
+        ctx.fillStyle = 'rgba(34,43,43,.20)';
+        ctx.fillRect(b.x + shadowX, b.y + shadowY, b.w, b.h);
+        ctx.fillStyle = b.color;
+        ctx.fillRect(b.x, b.y, b.w, b.h);
+        ctx.fillStyle = b.roof;
+        ctx.fillRect(b.x + 4, b.y + 4, b.w - 8, b.h - 8);
+        ctx.fillStyle = 'rgba(255,238,192,.6)';
+        for (var wx = b.x + 11; wx < b.x + b.w - 5; wx += 20) {
+          for (var wy = b.y + 11; wy < b.y + b.h - 5; wy += 23) ctx.fillRect(wx, wy, 5, 7);
+        }
+        if (b.shop) {
+          ctx.fillStyle = '#f7dfaa';
+          ctx.fillRect(b.x + b.w * 0.2, b.y + b.h - 15, b.w * 0.6, 9);
+          ctx.fillStyle = cfg.palette.ink;
+          ctx.font = '600 6px system-ui';
+          ctx.textAlign = 'center';
+          ctx.fillText(b.name, b.x + b.w / 2, b.y + b.h - 8);
+          ctx.textAlign = 'left';
+        }
+      });
+      /* Palms and lamps along the streets. */
+      world.palms.forEach(function (p) {
+        ctx.fillStyle = '#79593e';
+        ctx.fillRect(p.x - 2, p.y - 3, 5, 14);
+        ctx.fillStyle = '#346b58';
+        ctx.beginPath(); ctx.arc(p.x, p.y - 6, 12, 0, TAU); ctx.fill();
+      });
+      world.lamps.forEach(function (l) {
+        ctx.fillStyle = '#263b3a';
+        ctx.beginPath(); ctx.arc(l.x, l.y, 3, 0, TAU); ctx.fill();
+        ctx.strokeStyle = '#eddda9';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(l.x, l.y); ctx.lineTo(l.x + 5, l.y - 5); ctx.stroke();
+      });
+      /* Parked cars. */
+      world.parked.forEach(function (car) {
+        ctx.save();
+        ctx.translate(car.x, car.y);
+        ctx.fillStyle = 'rgba(10,20,22,.28)';
+        ctx.fillRect(-14, -5, 32, 15);
+        ctx.fillStyle = car.color;
+        ctx.fillRect(-16, -9, 30, 14);
+        ctx.fillStyle = '#a9c7bf';
+        ctx.fillRect(-8, -7, 12, 7);
+        ctx.restore();
+      });
+      /* Night shade and the sunset wash, both driven by the day fraction. */
+      var shade = state.day < 0.46 ? 0 : state.day < 0.55 ? (state.day - 0.46) * 1.45 : state.day < 0.86 ? 0.13 : Math.max(0, 0.13 - (state.day - 0.86) * 0.9);
+      if (shade > 0) {
+        ctx.fillStyle = 'rgba(25,36,64,' + shade + ')';
+        ctx.fillRect(view.x, view.y, vw, vh);
+      }
+      if (state.day > 0.36 && state.day < 0.57) {
+        ctx.fillStyle = 'rgba(252,116,76,' + (0.13 * (1 - Math.abs(state.day - 0.465) / 0.105)) + ')';
+        ctx.fillRect(view.x, view.y, vw, vh);
+      }
+      ctx.restore();
+      /* Mara: coral dot, pale face, and the chevron marker above her so the
+         player is readable at a glance in every district. */
+      var sx = (px - view.x) * view.scale, sy = (py - view.y) * view.scale;
+      ctx.fillStyle = 'rgba(22,40,40,.26)';
+      ctx.beginPath(); ctx.ellipse(sx, sy + 10, 12, 5, 0, 0, TAU); ctx.fill();
+      ctx.fillStyle = cfg.palette.coral;
+      ctx.beginPath(); ctx.arc(sx, sy, 8, 0, TAU); ctx.fill();
+      ctx.fillStyle = '#ffb39a';
+      ctx.beginPath(); ctx.arc(sx - 2, sy - 3, 3, 0, TAU); ctx.fill();
+      ctx.fillStyle = '#15383a';
+      ctx.beginPath();
+      ctx.moveTo(sx, sy - 23); ctx.lineTo(sx - 5, sy - 15); ctx.lineTo(sx + 5, sy - 15);
+      ctx.closePath(); ctx.fill();
+    }
+    function overlay(state, screen) {
+      var district = state.district.name;
+      roundRect(22, 20, 245, 76, 4, 'rgba(17,37,40,.88)');
+      ctx.fillStyle = cfg.palette.coral;
+      ctx.fillRect(22, 20, 4, 76);
+      text(district.toUpperCase(), 42, 50, 17, cfg.palette.paper, 700);
+      text('CORAL BAY  /  ' + state.clock, 42, 77, 13, '#a6c7bb', 500);
+      roundRect(view.width / 2 - 76, 20, 152, 36, 3, 'rgba(17,37,40,.74)');
+      text('MARA VOSS', view.width / 2 - 58, 44, 14, cfg.palette.paper, 700);
+      ctx.fillStyle = 'rgba(17,37,40,.5)';
+      ctx.fillRect(0, view.height - 38, view.width, 38);
+      text('WASD / ARROWS  MOVE', 24, view.height - 14, 12, '#fff2d3', 600);
+      text('SHIFT  RUN', 230, view.height - 14, 12, '#fff2d3', 600);
+      text('P  PAUSE', 350, view.height - 14, 12, '#fff2d3', 600);
+      text('M  MUTE', 445, view.height - 14, 12, '#fff2d3', 600);
+      if (screen === 'title') {
+        ctx.fillStyle = 'rgba(8,23,28,.48)';
+        ctx.fillRect(0, 0, view.width, view.height);
+        var x = view.width * 0.09, y = view.height * 0.17;
+        ctx.fillStyle = cfg.palette.coral;
+        ctx.fillRect(x, y, 5, 128);
+        text('CORAL BAY', x + 24, y + 53, Math.min(76, view.width * 0.09), '#fff3d6', 800);
+        text('HEAT', x + 27, y + 111, 47, cfg.palette.coral, 800);
+        text('A city with its own tide.', x + 28, y + 153, 18, '#e1e5cf', 500);
+        roundRect(x + 26, y + 190, 252, 50, 3, cfg.palette.coral);
+        text('ENTER THE CITY  [ ENTER ]', x + 45, y + 222, 15, '#19292a', 800);
+        text('WASD / ARROWS  WALK     SHIFT  RUN', x + 27, y + 282, 13, '#e2e1cc', 600);
+        text('P  PAUSE     M  MUTE     MOUSE  LOOK', x + 27, y + 307, 13, '#e2e1cc', 600);
+      } else if (screen === 'paused') {
+        ctx.fillStyle = 'rgba(12,27,30,.53)';
+        ctx.fillRect(0, 0, view.width, view.height);
+        text('PAUSED', view.width / 2 - 85, view.height / 2 - 20, 42, '#fff3d6', 800);
+        text('P or ENTER  RESUME', view.width / 2 - 89, view.height / 2 + 20, 14, '#c0d7ca', 600);
+        text('WASD / ARROWS WALK   ·   SHIFT RUN   ·   M MUTE', view.width / 2 - 167, view.height / 2 + 55, 12, '#c0d7ca', 500);
       }
     }
-
-    const player = state.player;
-    // Blink while invulnerable after a hit: hidden on every other tenth of a second.
-    if (player.invulnerable === 0 || Math.floor(player.invulnerable * 10) % 2 === 1) {
-      context.fillStyle = PALETTE.player;
-      context.fillRect(player.x, player.y, player.width, player.height);
+    function draw(world, state, screen) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      worldDraw(world, state);
+      ctx.setTransform(view.scale, 0, 0, view.scale, 0, 0);
+      overlay(state, screen);
     }
+    resize();
+    window.addEventListener('resize', resize);
+    return { draw: draw, view: view };
   }
-
-  function drawHud(state) {
-    context.textBaseline = 'top';
-    text(scoreLabel(state.score), 24, 20, 28, PALETTE.text, 'left');
-    text(levelLabel(state.level), FIELD.width / 2, 20, 28, PALETTE.text, 'center');
-    const firstLife = FIELD.width - 24 - LIVES * (LIFE_SIZE + LIFE_GAP) + LIFE_GAP;
-    text('Lives', firstLife - 12, 20, 28, PALETTE.text, 'right');
-    for (let life = 0; life < LIVES; life += 1) {
-      context.fillStyle = life < state.lives ? PALETTE.player : PALETTE.ground;
-      context.fillRect(firstLife + life * (LIFE_SIZE + LIFE_GAP), 24, LIFE_SIZE, LIFE_SIZE);
-    }
-  }
-
-  function drawPanel(title, lines, prompt) {
-    const height = PANEL.top + lines.length * PANEL.line + PANEL.bottom;
-    const x = (FIELD.width - PANEL.width) / 2;
-    const y = (FIELD.height - height) / 2;
-    context.fillStyle = PALETTE.panel;
-    context.fillRect(x, y, PANEL.width, height);
-    context.textBaseline = 'alphabetic';
-    text(title, FIELD.width / 2, y + 78, 48, PALETTE.text, 'center');
-    for (let index = 0; index < lines.length; index += 1) {
-      text(lines[index], FIELD.width / 2, y + PANEL.top + index * PANEL.line, 22, PALETTE.muted, 'center');
-    }
-    text(prompt, FIELD.width / 2, y + height - 40, 24, PALETTE.coin, 'center');
-  }
-
-  const TITLE_LINES = ['Dodge the red blocks. Catch the gold coins.', 'Move with ← → or A D.  Pause with P.', ''];
-  const PAUSED_LINES = ['The blocks will wait for you.'];
-  const OVER_LINES = ['', ''];
-
-  /** Paint one frame: the field, then the HUD or a panel for the screen the game is on. */
-  function draw(state, screen, best) {
-    context.setTransform(1, 0, 0, 1, 0, 0);
-    context.fillStyle = PALETTE.backdrop;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
-    drawField(state);
-    if (screen === SCREEN_TITLE) {
-      TITLE_LINES[2] = bestLabel(best);
-      drawPanel('Block Dodger', TITLE_LINES, 'Press Space or click to start');
-      return;
-    }
-    drawHud(state);
-    if (screen === SCREEN_PAUSED) drawPanel('Paused', PAUSED_LINES, 'Press P to resume');
-    else if (screen === SCREEN_OVER) {
-      OVER_LINES[0] = finalLabel(state.score);
-      OVER_LINES[1] = bestLabel(best);
-      drawPanel('Game over', OVER_LINES, 'Press Space or click to play again');
-    }
-  }
-
-  resize();
-  window.addEventListener('resize', resize);
-  return { draw };
-}
+  return { create: create };
+}());

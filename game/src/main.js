@@ -1,134 +1,80 @@
-// Boot and the one loop: input is read every frame, the world advances in fixed 1/60 s steps
-// (several in a slow frame, none in a fast one), and the renderer paints what is there. The game
-// moves between four screens: title, play, paused and game over.
-//
-// ?seed=N fixes the falling pattern. ?shot=start|play|end (with &seed=N) stages that scene
-// instead of running the loop, paints it twice and sets window.__shotReady for a screenshot.
-import { BEST_KEY, LIVES, STEP } from './config.js';
-import { createRandom } from './random.js';
-import { createWorld, EVENT_HIT, EVENT_OVER } from './world.js';
-import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
-import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
-import { stageShot } from './shots.js';
+/* Boot and the one loop: read input, step the player, paint the frame.
+   Screens: title, play, paused. The day clock runs on a 10-minute cycle
+   (07: mission-locked lighting comes later; S1 just runs the cycle).
+   window.CoralGame exposes the live state for the automated acceptance
+   checks and for the next build sessions — it is a debug handle, not a cheat. */
+(function () {
+  var canvas = document.getElementById('game');
+  var status = document.getElementById('status');
+  var world = CoralWorld.create();
+  var input = GameInput.create(canvas);
+  var renderer = CoralRender.create(canvas);
+  var start = world.safeSpawn();
+  var state = {
+    player: { x: start.x, y: start.y },
+    dt: 0, day: 0.38, clock: '', district: world.districtAt(start.x, start.y),
+    elapsed: 0, muted: false
+  };
+  var screen = 'title';
+  var last = performance.now();
+  var lastDistrict = state.district.name;
 
-/** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
-const MAX_FRAME = 0.25;
-
-const params = new URLSearchParams(window.location.search);
-const shot = params.get('shot');
-const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() * 4294967296);
-
-const canvas = document.getElementById('game');
-const status = document.getElementById('status');
-const world = createWorld(createRandom(seed));
-const renderer = createRenderer(canvas);
-
-function readBest() {
-  try {
-    return Number.parseInt(window.localStorage.getItem(BEST_KEY) ?? '0', 10) || 0;
-  } catch {
-    return 0;
+  function formatClock(day) {
+    var minutes = Math.floor(day * 1440);
+    var hour = Math.floor(minutes / 60) % 12 || 12;
+    var minute = minutes % 60;
+    return hour + ':' + String(minute).padStart(2, '0') + (day < 0.5 ? ' AM' : ' PM');
   }
-}
+  state.clock = formatClock(state.day);
 
-function saveBest(value) {
-  try {
-    window.localStorage.setItem(BEST_KEY, String(value));
-  } catch {
-    // Storage can be off (private windows): the best score then lasts this visit only.
-  }
-}
-
-function runShot(name) {
-  const scene = stageShot(name, world);
-  let painted = 0;
-  function paint() {
-    renderer.draw(world.state, scene.screen, scene.best);
-    painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
-    else window.__shotReady = true;
-  }
-  requestAnimationFrame(paint);
-}
-
-function runGame() {
-  const input = createInput(canvas);
-  let screen = SCREEN_TITLE;
-  let best = readBest();
-  let accumulator = 0;
-  let last = performance.now();
-
-  // Screen readers (and anyone watching the page's text) hear the screen changes and each hit.
-  function announce(message) {
-    status.textContent = message;
-  }
-
-  function startGame() {
-    world.reset();
-    accumulator = 0;
-    screen = SCREEN_PLAY;
-    announce(`Playing. ${LIVES} lives.`);
-  }
-
-  function endGame() {
-    screen = SCREEN_OVER;
-    if (world.state.score > best) {
-      best = world.state.score;
-      saveBest(best);
+  function update(dt) {
+    var axis = input.axis();
+    var length = Math.hypot(axis.x, axis.y) || 1;
+    /* Speed is metres per second; dt is seconds. No extra multiplier. */
+    var speed = axis.run ? GAME_CONFIG.player.run : GAME_CONFIG.player.walk;
+    var nextX = Math.max(30, Math.min(GAME_CONFIG.city.width - 240, state.player.x + axis.x / length * speed * dt));
+    var nextY = Math.max(30, Math.min(GAME_CONFIG.city.height - 30, state.player.y + axis.y / length * speed * dt));
+    /* Axis-separated collision: slide along a building instead of sticking. */
+    if (!world.buildingAt(nextX, state.player.y)) state.player.x = nextX;
+    if (!world.buildingAt(state.player.x, nextY)) state.player.y = nextY;
+    state.district = world.districtAt(state.player.x, state.player.y);
+    if (state.district.name !== lastDistrict) {
+      lastDistrict = state.district.name;
+      status.textContent = 'Now entering ' + lastDistrict + '.';
     }
-    announce(`Game over. Score ${world.state.score}. Best ${best}.`);
-  }
-
-  function handleActions() {
-    const actions = input.takeActions();
-    if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) startGame();
-    else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
-      screen = SCREEN_PLAY;
-      announce('Playing.');
-    }
-  }
-
-  function step() {
-    if (screen === SCREEN_TITLE) {
-      world.step(STEP, 0, true);
-      return;
-    }
-    const events = world.step(STEP, input.direction(), false);
-    if (events & EVENT_OVER) endGame();
-    else if (events & EVENT_HIT) announce(world.state.lives === 1 ? 'Hit. 1 life left.' : `Hit. ${world.state.lives} lives left.`);
+    state.elapsed += dt;
+    state.day = (state.elapsed / GAME_CONFIG.city.cycle + 0.26) % 1;
+    state.clock = formatClock(state.day);
+    state.dt = dt;
   }
 
   function frame(now) {
     requestAnimationFrame(frame);
-    accumulator += Math.min((now - last) / 1000, MAX_FRAME);
+    var dt = Math.min(0.05, (now - last) / 1000);
     last = now;
-    handleActions();
-    if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
-      while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
-        step();
-        accumulator -= STEP;
-      }
-    } else {
-      accumulator = 0;
+    if (input.take('KeyM')) {
+      state.muted = !state.muted;
+      status.textContent = state.muted ? 'Audio muted' : 'Audio on';
     }
-    renderer.draw(world.state, screen, best);
+    if (screen === 'title' && (input.take('Enter') || input.take('Space') || input.take('pointer'))) {
+      screen = 'play';
+      last = now;
+      status.textContent = 'Exploring Coral Bay. ' + state.district.name + ', ' + state.clock + '.';
+    } else if (screen === 'play' && (input.take('KeyP') || input.take('Escape'))) {
+      screen = 'paused';
+    } else if (screen === 'paused' && (input.take('KeyP') || input.take('Escape') || input.take('Enter'))) {
+      screen = 'play';
+      last = now;
+    }
+    if (screen === 'play') update(dt);
+    else state.dt = dt;
+    renderer.draw(world, state, screen);
   }
 
-  // Leaving the tab pauses a running game rather than letting blocks fall unseen.
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    }
-  });
-
-  announce('Block Dodger. Press Space or click to start.');
+  window.CoralGame = {
+    get screen() { return screen; },
+    state: state, world: world, input: input, renderer: renderer
+  };
+  status.textContent = 'Coral Bay Heat. Press Enter to enter the city.';
   requestAnimationFrame(frame);
-}
-
-if (shot) runShot(shot);
-else runGame();
+}());

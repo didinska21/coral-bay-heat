@@ -1,61 +1,15 @@
-// Every tuning number and colour in one place. The playfield is a fixed 1280x720 logical area;
-// the renderer scales it to the window, so no rule below depends on the screen size.
-
-export const FIELD = { width: 1280, height: 720, groundY: 664 };
-
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
-export const STEP = 1 / 60;
-
-export const PLAYER = {
-  width: 72,
-  height: 24,
-  speed: 560,
-  invulnerable: 1.5,
+/* Central tuning and authored city data for Coral Bay. Every number lives here;
+   no other module hard-codes a tuning constant of its own. */
+var GAME_CONFIG = {
+  city: { width: 3200, height: 2400, block: 180, road: 28, sidewalk: 8, beach: 190, cycle: 600, seed: 731942 },
+  player: { walk: 4.5, run: 7.5, radius: 8 },
+  camera: { height: 180, follow: 4.2 },
+  districts: [
+    { name: 'Mangrove Outskirts', x: 0, y: 1170, width: 1300, height: 1230, color: '#526e54' },
+    { name: 'Downtown', x: 780, y: 0, width: 1250, height: 1510, color: '#d3a36c' },
+    { name: 'Boardwalk', x: 2030, y: 0, width: 1170, height: 1120, color: '#e6c58c' },
+    { name: 'Marina', x: 1690, y: 1120, width: 1510, height: 1280, color: '#bdad80' }
+  ],
+  shops: ['Palmetto Pawn', 'Casa Sirena', 'Voss & Sons Motors', 'Coral Crown', 'Blue Current', 'Sunline Pharmacy', 'Lucky Pelican', 'Citrus Exchange', 'Marea Market', 'Southpoint Deli', 'Gilded Gull Office', 'Bayview Records', 'Tideglass Cafe', 'Marlin Supply', 'Last Light Lounge', 'Crown Laundry', 'Rook Auto Glass', 'Salt & Lime', 'Marina Tax', 'Seabreeze Hotel', 'Little Havana Bakery', 'Coastline Credit', 'Driftwood Florist', 'Neon Palm', 'Gulf Star Travel', 'Coral Key Realty', 'Dockside Bait', 'Mango House'],
+  palette: { ink: '#132529', paper: '#fff5df', coral: '#ff735d', teal: '#42aeb0', water: '#3199a1', deepWater: '#247d88', road: '#555c58', roadLine: '#e8d39c', building: ['#d98260', '#efb76c', '#6aa3a0', '#d8c6a0', '#da8c70', '#84a48c', '#d4a375'], roof: ['#b95f4f', '#cf8656', '#467e7b', '#a99a78'] }
 };
-
-export const LIVES = 3;
-
-export const BLOCK = {
-  minWidth: 40,
-  maxWidth: 110,
-  height: 36,
-  speed: 240,
-  speedPerLevel: 30,
-  speedJitter: 90,
-  interval: 0.55,
-  intervalScale: 0.88,
-  minInterval: 0.14,
-  dodgePoints: 1,
-};
-
-export const COIN = {
-  size: 24,
-  speed: 190,
-  speedPerLevel: 14,
-  interval: 1.4,
-  intervalJitter: 0.8,
-  points: 10,
-};
-
-/** Seconds of play per level, and the last level: speeds and spawn rates stop growing there. */
-export const LEVEL = { seconds: 12, max: 12 };
-
-/** How many falling things can exist at once; the pool is allocated once, at boot. */
-export const POOL_SIZE = 64;
-
-export const PALETTE = {
-  backdrop: '#11141b',
-  sky: '#1b1f2a',
-  ground: '#2a3040',
-  player: '#4fc3f7',
-  block: '#e5534b',
-  coin: '#f2c94c',
-  panel: '#252b38',
-  text: '#eef1f5',
-  muted: '#8b93a3',
-};
-
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
-
-/** Where the best score is kept between visits (this browser only). */
-export const BEST_KEY = 'block-dodger.best';

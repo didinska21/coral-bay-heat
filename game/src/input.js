@@ -1,53 +1,32 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
-
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
-
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
-
-export function createInput(target) {
-  let left = false;
-  let right = false;
-  let actions = 0;
-
-  window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
-  });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
-  });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
-  window.addEventListener('blur', () => {
-    left = false;
-    right = false;
-  });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
-  });
-
-  return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
-    },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
-    },
-  };
-}
+/* Keyboard + mouse, polled once per frame. Movement keys report a held axis;
+   action keys are consumed once via take(). */
+var GameInput = (function () {
+  function create(canvas) {
+    var held = Object.create(null), pressed = Object.create(null);
+    var mouse = { x: 0, y: 0, down: false };
+    var WATCHED = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'KeyE', 'KeyF', 'KeyP', 'KeyM', 'KeyH', 'Enter', 'Space', 'Escape'];
+    window.addEventListener('keydown', function (event) {
+      if (WATCHED.indexOf(event.code) < 0) return;
+      event.preventDefault();
+      if (!held[event.code] && !event.repeat) pressed[event.code] = true;
+      held[event.code] = true;
+    });
+    window.addEventListener('keyup', function (event) { held[event.code] = false; });
+    window.addEventListener('blur', function () { held = Object.create(null); });
+    canvas.addEventListener('pointermove', function (event) { mouse.x = event.clientX; mouse.y = event.clientY; });
+    canvas.addEventListener('pointerdown', function () { mouse.down = true; pressed.pointer = true; });
+    window.addEventListener('pointerup', function () { mouse.down = false; });
+    return {
+      axis: function () {
+        return {
+          x: (held.KeyD || held.ArrowRight ? 1 : 0) - (held.KeyA || held.ArrowLeft ? 1 : 0),
+          y: (held.KeyS || held.ArrowDown ? 1 : 0) - (held.KeyW || held.ArrowUp ? 1 : 0),
+          run: !!(held.ShiftLeft || held.ShiftRight)
+        };
+      },
+      take: function (key) { var result = !!pressed[key]; pressed[key] = false; return result; },
+      mouse: mouse
+    };
+  }
+  return { create: create };
+}());
