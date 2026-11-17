@@ -46,10 +46,10 @@ var CoralMissions = (function () {
       var r = world.nearestRoad(p.x, p.y);
       return { x: r.x, y: r.y };
     }
-    var workshop = shopCenter('Voss & Sons Motors') || districtCenter('Downtown');
-    var pawn = shopCenter('Palmetto Pawn') || districtCenter('Downtown');
-    var sirena = shopCenter('Casa Sirena') || districtCenter('Downtown');
-    var crown = shopCenter('Coral Crown') || districtCenter('Boardwalk');
+    var workshop = onRoad(shopCenter('Voss & Sons Motors') || districtCenter('Downtown'));
+    var pawn = onRoad(shopCenter('Palmetto Pawn') || districtCenter('Downtown'));
+    var sirena = onRoad(shopCenter('Casa Sirena') || districtCenter('Downtown'));
+    var crown = onRoad(shopCenter('Coral Crown') || districtCenter('Boardwalk'));
     var pier = world.piers[2]
       ? { x: world.piers[2].x + 9, y: world.piers[2].y + world.piers[2].h / 2 }
       : { x: 2500, y: 1290 };
@@ -62,7 +62,7 @@ var CoralMissions = (function () {
         break;
       }
     }
-    warehouse = warehouse || onRoad({ x: 2400, y: 1800 });
+    warehouse = onRoad(warehouse || { x: 2400, y: 1800 });
     var mangroveHideout = onRoad({ x: 300, y: 2200 });
     var loanerCar = null;
     vehicles.cars.forEach(function (c) {
@@ -242,12 +242,16 @@ var CoralMissions = (function () {
       }
       if (m.def.id === 'm3' && m.stageIndex === 2) {
         /* The rival steals it back five seconds after the player takes it. */
+        s.car = m.stages[1].car;
         s.stealBack = 5;
       }
       if (m.def.id === 'm3' && m.stageIndex === 3) police.setMission(3, false);
       if (m.def.id === 'm4' && m.stageIndex === 1) {
         for (var g = 0; g < 3; g++) {
+          /* Guards stand on open ground around the warehouse, never inside
+             a building — a guard inside a wall could never be shot. */
           var gx = warehouse.x + (g - 1) * 26, gy = warehouse.y + (g % 2 ? 22 : -22);
+          if (world.buildingAt(gx, gy)) { var r = world.nearestRoad(gx, gy); gx = r.x; gy = r.y; }
           combat.spawnEnemy(gx, gy, { group: 'm4', active: true });
         }
       }
@@ -510,8 +514,10 @@ var CoralMissions = (function () {
       } else if (s.type === 'recover') {
         if (s.stealBack > 0) {
           s.stealBack -= dt;
-          if (s.stealBack <= 0 && vehicles.playerCar === s.car) {
-            vehicles.exit(state.player);
+          if (s.stealBack <= 0) {
+            /* The rival takes it back — whether Mara is still sitting in it
+               or already stepped out, the Sable drives off on its own. */
+            if (vehicles.playerCar === s.car) vehicles.exit(state.player);
             s.car.ai = false;
             s.car.driver = true;
             s.car.flee = true;

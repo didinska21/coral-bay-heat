@@ -132,7 +132,7 @@ var CoralHud = (function () {
         text(label + (a.timer > 0 ? '  ·  ' + Math.ceil(a.timer) + 's' : ''), 42, objY + (missions.active ? 92 : 68), 11, '#ffd34d', 700);
       }
       /* Notifications, right side under the money pill. */
-      var ny = 172;
+      var ny = 182;
       state.notifications.forEach(function (n) {
         if (state.elapsed > n.until) return;
         var fade = Math.min(1, (n.until - state.elapsed) / 0.5);
@@ -181,7 +181,7 @@ var CoralHud = (function () {
             ctx.fill();
           } else {
             var cx = Math.max(40, Math.min(view.width - 40, sx));
-            var cy = Math.max(60, Math.min(view.height - 90, sy));
+            var cy = Math.max(130, Math.min(view.height - 90, sy));
             var angle = Math.atan2(sy - view.height / 2, sx - view.width / 2);
             ctx.fillStyle = '#ffd34d';
             ctx.beginPath();

@@ -244,6 +244,125 @@ server.listen(0, '127.0.0.1', async () => {
     check('policeProjectileDamage', await evaluate('CoralGame.state.player.health<100'));
     await evaluate('CoralGame.state.player.health=9;true'); await delay(4000);
     check('wasted', await evaluate("CoralGame.screen==='failed' && CoralGame.state.fail==='WASTED' && CoralGame.state.player.health===0"));
+    // ---- S4: missions, HUD, save, audio ----
+    // Retry out of the WASTED screen (no mission active) and start M1.
+    await tap('Enter');
+    check('retryToPlay', await evaluate("CoralGame.screen==='play'"));
+    results.moneyStart = await evaluate('CoralGame.state.money');
+    check('moneyStartsZero', results.moneyStart === 0);
+    check('audioEnabled', await evaluate('CoralGame.audio.enabled()'));
+    await evaluate("CoralGame.missions.start('m1')");
+    await delay(300);
+    check('m1Started', await evaluate("CoralGame.missions.active && CoralGame.missions.active.def.id==='m1' && CoralGame.missions.active.stageIndex===0"));
+    check('m1DialogShown', await evaluate('!!CoralGame.missions.dialog'));
+    check('m1LightLocked', await evaluate('CoralGame.state.lightLock===0.38'));
+    check('minimapMarkers', await evaluate("CoralGame.hud.lastMarkers().some(m=>m.kind==='objective') && CoralGame.hud.lastMarkers().some(m=>m.kind==='player')"));
+    // Warp helper: move the player (and the driven car) onto the current objective.
+    await evaluate(`window.warpToObjective = () => { const g=CoralGame, t=g.missions.stageTarget(); if(!t) return false; const c=g.vehicles.playerCar; if(c){c.x=t.x;c.y=t.y;c.speed=0;c.vx=0;c.vy=0;} g.state.player.x=t.x; g.state.player.y=t.y; return true; }; true`);
+    await evaluate('warpToObjective()');
+    await delay(500);
+    check('m1Stage1', await evaluate('CoralGame.missions.active.stageIndex===1'));
+    // Enter the loaner car with a real E key.
+    await tap('KeyE');
+    await delay(300);
+    check('m1InCar', await evaluate('!!CoralGame.vehicles.playerCar && CoralGame.missions.active.stageIndex===2'));
+    await evaluate('warpToObjective()'); await delay(400);
+    check('m1Stage3', await evaluate('CoralGame.missions.active.stageIndex===3'));
+    await evaluate('warpToObjective()'); await delay(400);
+    check('m1Stage4', await evaluate('CoralGame.missions.active.stageIndex===4'));
+    await shot('s4-m1.png');
+    await evaluate('warpToObjective()'); await delay(600);
+    check('m1Passed', await evaluate("!CoralGame.missions.active && CoralGame.missions.completed.includes('m1') && CoralGame.state.money===250"));
+    check('m1Banner', await evaluate("!!CoralGame.missions.banner && CoralGame.missions.banner.title==='MISSION PASSED'"));
+    check('saveWritten', await evaluate("!!localStorage.getItem('coral-bay-heat-save-v1') && JSON.parse(localStorage.getItem('coral-bay-heat-save-v1')).money===250"));
+    // Reload: Continue must restore money and the story chain.
+    await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/index.html` });
+    await delay(1200);
+    check('continueOffered', await evaluate('CoralGame.state.hasSave===true'));
+    await tap('Enter');
+    await delay(400);
+    check('continueRestores', await evaluate("CoralGame.screen==='play' && CoralGame.state.money===250 && CoralGame.missions.completed.includes('m1')"));
+    // The reload wiped window.warpToObjective with the old page: define it again.
+    await evaluate(`window.warpToObjective = () => { const g=CoralGame, t=g.missions.stageTarget(); if(!t) return false; const c=g.vehicles.playerCar; if(c){c.x=t.x;c.y=t.y;c.speed=0;c.vx=0;c.vy=0;} g.state.player.x=t.x; g.state.player.y=t.y; return true; }; true`);
+    // M2 chain: pistol unlock + guards, driven through with the same warps.
+    await evaluate("CoralGame.missions.start('m2')");
+    await delay(300);
+    check('m2Started', await evaluate("CoralGame.missions.active && CoralGame.missions.active.def.id==='m2'"));
+    await evaluate('warpToObjective()'); await delay(400);
+    check('m2Stage1Guards', await evaluate('CoralGame.missions.active.stageIndex===1 && CoralGame.missions.chasers.length===2'));
+    await evaluate('warpToObjective()'); await delay(500);
+    check('m2PassedPistol', await evaluate("!CoralGame.missions.active && CoralGame.combat.pistolUnlocked===true && CoralGame.state.money===850"));
+    // One activity end to end: taxi, pickup to drop-off.
+    const moneyBeforeTaxi = await evaluate('CoralGame.state.money');
+    await evaluate("CoralGame.missions.startActivity('taxi')");
+    await delay(200);
+    check('taxiStarted', await evaluate("!!CoralGame.missions.activity && CoralGame.missions.activity.kind==='taxi'"));
+    await evaluate(`(() => { const g=CoralGame, a=g.missions.activity; const c=g.vehicles.playerCar; if(c){c.x=a.x;c.y=a.y;c.speed=0;} g.state.player.x=a.x; g.state.player.y=a.y; return true; })()`);
+    await delay(400);
+    check('taxiPays', await evaluate(`CoralGame.state.money>${moneyBeforeTaxi} && !CoralGame.missions.activity`));
+    results.moneyAfterTaxi = await evaluate('CoralGame.state.money');
+    // Hot-car: steal the requested type, deliver to the workshop.
+    await evaluate("CoralGame.missions.startActivity('hotcar')");
+    await delay(200);
+    const hotType = await evaluate('CoralGame.missions.activity.targetType');
+    results.hotCarType = hotType;
+    await evaluate(`(() => { const g=CoralGame, t=g.missions.activity.targetType; const c=g.vehicles.cars.find(c=>!c.ai && c.type.id===t); if(!c) return false; g.state.player.x=c.x+30; g.state.player.y=c.y; return true; })()`);
+    await tap('KeyE'); await delay(300);
+    check('hotCarStolen', await evaluate("CoralGame.missions.activity.phase==='deliver'"));
+    await evaluate(`(() => { const g=CoralGame, a=g.missions.activity; const c=g.vehicles.playerCar; if(c){c.x=a.x;c.y=a.y;c.speed=0;} g.state.player.x=a.x; g.state.player.y=a.y; return true; })()`);
+    await delay(400);
+    check('hotCarPays', await evaluate(`CoralGame.state.money>${moneyBeforeTaxi} && !CoralGame.missions.activity`));
+    await shot('s4-activity.png');
+    // M3 chain: steal the Sable, lose it to the rival, win it back, hide it.
+    await evaluate("CoralGame.missions.start('m3')");
+    await delay(300);
+    check('m3Started', await evaluate("CoralGame.missions.active && CoralGame.missions.active.def.id==='m3'"));
+    await evaluate('warpToObjective()'); await delay(400);
+    check('m3Stage1', await evaluate('CoralGame.missions.active.stageIndex===1'));
+    // Steal the Sable: step out of the hot-car first (E toggles), then in.
+    await evaluate('CoralGame.vehicles.exit(CoralGame.state.player);true');
+    await evaluate('warpToObjective()'); await delay(200);
+    await tap('KeyE'); await delay(300);
+    check('m3StoleSable', await evaluate("CoralGame.missions.active.stageIndex===2 && !!CoralGame.vehicles.playerCar && CoralGame.vehicles.playerCar.type.id==='sport'"));
+    // Five seconds later the rival takes it back and drives off.
+    await delay(7000);
+    check('m3StolenBack', await evaluate("!CoralGame.vehicles.playerCar && CoralGame.missions.active.stages[2].car.flee===true"));
+    // Catch it: warp next to it (it slows when Mara is close) and carjack it back.
+    await evaluate(`(() => { const g=CoralGame, c=g.missions.active.stages[2].car; g.state.player.x=c.x+25; g.state.player.y=c.y; return true; })()`);
+    await delay(200);
+    await tap('KeyE'); await delay(300);
+    check('m3Recovered', await evaluate("CoralGame.missions.active.stageIndex===3 && CoralGame.vehicles.playerCar && CoralGame.vehicles.playerCar.type.id==='sport'"));
+    await evaluate('warpToObjective()'); await delay(400);
+    check('m3Passed', await evaluate("!CoralGame.missions.active && CoralGame.missions.sportStored===true && CoralGame.missions.completed.includes('m3')"));
+    // M4 chain: clear the warehouse guards, escape to the mangroves, lay low.
+    await evaluate("CoralGame.missions.start('m4')");
+    await delay(300);
+    await evaluate('warpToObjective()'); await delay(400);
+    check('m4Stage1', await evaluate('CoralGame.missions.active.stageIndex===1'));
+    check('m4GuardsSpawned', await evaluate("CoralGame.combat.enemies.filter(e=>e.group==='m4' && e.health>0).length===3"));
+    await evaluate(`(() => { const g=CoralGame; g.combat.enemies.filter(e=>e.group==='m4').forEach(e=>g.combat.hurt(e, 200, 0)); return true; })()`);
+    await delay(400);
+    check('m4Stage2', await evaluate('CoralGame.missions.active.stageIndex===2'));
+    check('m4FloorFour', await evaluate('CoralGame.police.stars>=4'));
+    await evaluate('warpToObjective()'); await delay(400);
+    check('m4Stage3', await evaluate('CoralGame.missions.active.stageIndex===3'));
+    // Lay low: run the escape clock deterministically until the stars drop.
+    await evaluate('stepPolice(30)');
+    await delay(400);
+    check('m4Passed', await evaluate("!CoralGame.missions.active && CoralGame.missions.completed.includes('m4') && !!CoralGame.state.news"));
+    // M5 chain: three bags with the heat rising, then the dawn delivery.
+    await evaluate("CoralGame.missions.start('m5')");
+    await delay(300);
+    check('m5Started', await evaluate("CoralGame.missions.active && CoralGame.missions.active.def.id==='m5' && CoralGame.police.stars>=3"));
+    await evaluate('warpToObjective()'); await delay(400);
+    check('m5Bag1', await evaluate('CoralGame.police.stars>=4'));
+    await evaluate('warpToObjective()'); await delay(400);
+    check('m5Bag2', await evaluate('CoralGame.police.stars===5'));
+    await evaluate('warpToObjective()'); await delay(400);
+    check('m5BagsDone', await evaluate('CoralGame.missions.active.stageIndex===1'));
+    await evaluate('warpToObjective()'); await delay(500);
+    check('m5Passed', await evaluate("!CoralGame.missions.active && CoralGame.missions.storyComplete===true && CoralGame.missions.completed.includes('m5')"));
+    results.moneyFinal = await evaluate('CoralGame.state.money');
     check('noRuntimeErrors', runtimeErrors.length === 0);
     results.runtimeErrors = runtimeErrors;
   } catch (error) {
@@ -255,5 +374,5 @@ server.listen(0, '127.0.0.1', async () => {
   }
   console.log(JSON.stringify(results, null, 2));
   if (failures.length) { console.error('FAILURES:', failures.join(', ')); process.exit(1); }
-  console.log('S3 ACCEPTANCE: PASS');
+  console.log('S4 ACCEPTANCE: PASS');
 });
