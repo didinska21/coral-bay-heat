@@ -143,13 +143,20 @@ server.listen(0, '127.0.0.1', async () => {
     // is the assertion: a driven car becomes the player's, its driver bails.
     check('carjackingWorks', await evaluate("!!CoralGame.vehicles.playerCar && CoralGame.vehicles.drivers.length > 0"));
     // Traffic must be alive, moving, and never inside a building.
+    // Traffic must be alive and moving. Match cars by id across the window
+    // (a refresh may respawn some), and require at least two of them to
+    // have moved — a few cars can legitimately sit in a queue or a pause.
     const aiBefore = await evaluate("CoralGame.vehicles.cars.filter(c => c.ai).length");
-    const aiPos = await evaluate("CoralGame.vehicles.cars.filter(c => c.ai).slice(0, 5).map(c => [Math.round(c.x), Math.round(c.y)])");
+    const aiSample = await evaluate("CoralGame.vehicles.cars.filter(c => c.ai).slice(0, 8).map(c => [c.id, Math.round(c.x), Math.round(c.y)])");
     await delay(3000);
-    const aiPosAfter = await evaluate("CoralGame.vehicles.cars.filter(c => c.ai).slice(0, 5).map(c => [Math.round(c.x), Math.round(c.y)])");
-    const aiMoved = aiPos.some((p, i) => aiPosAfter[i] && Math.hypot(aiPosAfter[i][0] - p[0], aiPosAfter[i][1] - p[1]) > 5);
+    const aiSampleAfter = await evaluate("CoralGame.vehicles.cars.filter(c => c.ai).map(c => [c.id, Math.round(c.x), Math.round(c.y)])");
+    const aiMovedCount = aiSample.filter(p => {
+      const q = aiSampleAfter.find(r => r[0] === p[0]);
+      return q && Math.hypot(q[1] - p[1], q[2] - p[2]) > 5;
+    }).length;
     results.aiCount = aiBefore;
-    check('trafficMoves', aiMoved);
+    results.aiMovedCount = aiMovedCount;
+    check('trafficMoves', aiMovedCount >= 2);
     check('trafficNotInBuildings', await evaluate("CoralGame.vehicles.cars.every(c => !CoralGame.world.buildingAt(c.x, c.y))"));
     await shot('s2-traffic.png');
     // Reload: traffic must repopulate to its district target, not drain away.
