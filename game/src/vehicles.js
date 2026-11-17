@@ -167,6 +167,15 @@ var CoralVehicles = (function () {
       return c;
     }
 
+    /* Generic spawn for mission cars (the Sable, the M2 guard cars): the
+       caller owns the driving — traffic only steers cars flagged ai. */
+    function spawnCar(typeId, x, y, angle, ai) {
+      var t = typeFor(typeId);
+      var c = make(x, y, t, t.colors[Math.floor(random() * t.colors.length)], angle || 0, !!ai);
+      cars.push(c);
+      return c;
+    }
+
     function spawnTraffic(count, district) {
       var made = 0, tries = 0;
       while (made < count && tries++ < count * 30) {
@@ -252,7 +261,7 @@ var CoralVehicles = (function () {
       cars: cars, drivers: drivers, events: events,
       get playerCar() { return playerCar; },
       enter: enter, exit: exit, update: update, damage: damage,
-      shotAt: shotAt, spawnTraffic: spawnTraffic, spawnPolice: spawnPolice, move: collide,
+      shotAt: shotAt, spawnTraffic: spawnTraffic, spawnPolice: spawnPolice, spawnCar: spawnCar, move: collide,
       clearAt: clearAt, nearest: nearest,
       effects: function () { return effects; }
     };

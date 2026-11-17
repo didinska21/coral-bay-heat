@@ -266,7 +266,8 @@ var CoralRender = (function () {
           ctx.fill();
         });
         var aimers = state.combat.enemies.concat(state.police ? state.police.units : [],
-          state.police && state.police.roadblock ? [state.police.roadblock.car] : []);
+          state.police && state.police.roadblock ? [state.police.roadblock.car] : [],
+          state.missions ? state.missions.chasers : []);
         aimers.forEach(function (a) {
           if (a.aim <= 0 || a.health <= 0) return;
           ctx.strokeStyle = '#ff644f';
@@ -342,7 +343,9 @@ var CoralRender = (function () {
         text('★'.repeat(p.stars) + '☆'.repeat(5 - p.stars), hx + 15, 80, 21,
           p.searching && Math.sin(state.elapsed * 6) < 0 ? '#857f66' : '#ffcf78', 800);
         text(p.searching ? 'SEARCHING  ' + Math.max(0, p.escapeDuration - p.escapeElapsed).toFixed(1) + 's'
-          : p.stars ? 'POLICE PURSUIT' : 'PISTOL  /  F TO PUNCH', hx + 15, 102, 11, '#fff0d2', 700);
+          : p.stars ? 'POLICE PURSUIT'
+          : state.combat.pistolUnlocked ? 'PISTOL  /  F TO PUNCH' : 'F TO PUNCH — PISTOL LOCKED',
+          hx + 15, 102, 11, '#fff0d2', 700);
         if (p.searching) {
           ctx.fillStyle = '#42aeb0';
           ctx.fillRect(hx + 15, 111, 196 * Math.max(0, 1 - p.escapeElapsed / p.escapeDuration), 3);
@@ -359,7 +362,7 @@ var CoralRender = (function () {
       text('E  ENTER CAR', 350, view.height - 14, 12, '#fff2d3', 600);
       text('P  PAUSE', 480, view.height - 14, 12, '#fff2d3', 600);
       text('M  MUTE', 575, view.height - 14, 12, '#fff2d3', 600);
-      text('E  CAR    MOUSE  AIM / FIRE    F  PUNCH', 24, view.height - 52, 12, '#fff2d3', 700);
+      text('E  CAR    MOUSE  AIM / FIRE    F  PUNCH    H  MISSION / ACTIVITY', 24, view.height - 52, 12, '#fff2d3', 700);
       /* Driving HUD: speed + car, and the contextual interaction prompt. */
       if (state.vehicles) {
         var pc = state.vehicles.playerCar;
@@ -384,7 +387,12 @@ var CoralRender = (function () {
         text('HEAT', x + 27, y + 111, 47, cfg.palette.coral, 800);
         text('A city with its own tide.', x + 28, y + 153, 18, '#e1e5cf', 500);
         roundRect(x + 26, y + 190, 252, 50, 3, cfg.palette.coral);
-        text('ENTER THE CITY  [ ENTER ]', x + 45, y + 222, 15, '#19292a', 800);
+        if (state.hasSave && state.saveSummary) {
+          text('CONTINUE — $' + state.saveSummary.money + '  ·  ' + state.saveSummary.completed + '/5 MISSIONS  [ ENTER ]', x + 45, y + 222, 15, '#19292a', 800);
+          text('NEW GAME  [ N ]', x + 45, y + 248, 13, '#19292a', 700);
+        } else {
+          text('ENTER THE CITY  [ ENTER ]', x + 45, y + 222, 15, '#19292a', 800);
+        }
         text('WASD / ARROWS  MOVE     SHIFT  RUN     E  ENTER / EXIT CAR', x + 27, y + 282, 13, '#e2e1cc', 600);
         text('MOUSE  AIM / FIRE     F  PUNCH     SPACE  FOOT FIRE / HANDBRAKE', x + 27, y + 307, 13, '#e2e1cc', 600);
         text('P / ESC  PAUSE     M  MUTE', x + 27, y + 332, 13, '#e2e1cc', 600);
@@ -399,7 +407,7 @@ var CoralRender = (function () {
         ctx.fillStyle = 'rgba(12,27,30,.78)';
         ctx.fillRect(0, 0, view.width, view.height);
         text(state.fail, view.width / 2 - 105, view.height / 2 - 30, 48, cfg.palette.coral, 800);
-        text(state.fail === 'WASTED' ? state.combat.cause : state.police.cause,
+        text(state.failCause || (state.fail === 'WASTED' ? state.combat.cause : state.police.cause),
           view.width / 2 - 150, view.height / 2 + 10, 16, '#fff3d6', 600);
         text('ENTER  RETRY', view.width / 2 - 60, view.height / 2 + 53, 16, '#c0d7ca', 700);
       }

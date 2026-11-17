@@ -26,6 +26,18 @@ var GAME_CONFIG = {
     nightMultiplier: 0.6
   },
   camera: { height: 180, follow: 4.2 },
+  /* Missions and the street economy (02 + 03): story rewards, mission
+     timers, activity pay, repair and armour prices, the BUSTED fine. */
+  missions: {
+    rewards: { m1: 250, m2: 600, m3: 1200, m4: 2000, m5: 5000 },
+    timers: { m2: 150, m3Hide: 120, m5: 330, taxi: 120, parcel: 120 },
+    repair: 100, armour: 150, bustedFineRate: 0.10, bustedFineMax: 500,
+    taxiBase: 30, taxiPerMetre: 0.05, taxiTip: 20,
+    parcelPay: 150, parcelFastBonus: 50,
+    hotCarPay: 200, hotCarBonus: 100
+  },
+  /* Audio levels (14): master and the two continuous voices. */
+  audio: { master: 0.5, engine: 0.05, siren: 0.12, sirenRange: 300 },
   districts: [
     { name: 'Mangrove Outskirts', x: 0, y: 1170, width: 1300, height: 1230, color: '#526e54' },
     { name: 'Downtown', x: 780, y: 0, width: 1250, height: 1510, color: '#d3a36c' },
