@@ -347,7 +347,7 @@ var CoralRender = (function () {
           ctx.fillStyle = '#42aeb0';
           ctx.fillRect(hx + 15, 111, 196 * Math.max(0, 1 - p.escapeElapsed / p.escapeDuration), 3);
         }
-        if (p.arrestElapsed > 0) {
+        if (p.arrestElapsed > 0 && screen === 'play') {
           text('ARREST  ' + (GAME_CONFIG.police.arrestTime - p.arrestElapsed).toFixed(1) + 's — MOVE!',
             view.width / 2 - 105, 100, 18, '#ffb185', 800);
         }
