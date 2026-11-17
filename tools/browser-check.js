@@ -96,6 +96,63 @@ server.listen(0, '127.0.0.1', async () => {
     results.endPos = await evaluate('[Math.round(CoralGame.state.player.x), Math.round(CoralGame.state.player.y)]');
     check('districtChangedToMarina', district === 'Marina');
     await shot('s1-marina.png');
+    // ---- S2: vehicles + traffic ----
+    results.parkedCount = await evaluate("CoralGame.vehicles.cars.filter(c => !c.ai).length");
+    check('parkedCarsPresent', results.parkedCount >= 30);
+    // Step next to the nearest parked car (debug handle places the player;
+    // walking itself is already covered by the S1 walk above), then press E.
+    const parkedAt = await evaluate(`(() => { const v = CoralGame.vehicles; const p = CoralGame.state.player; const c = v.cars.filter(c => !c.ai).sort((a, b) => Math.hypot(a.x - p.x, a.y - p.y) - Math.hypot(b.x - p.x, b.y - p.y))[0]; p.x = c.x + 30; p.y = c.y; return [Math.round(c.x), Math.round(c.y), c.type.id]; })()`);
+    results.nearestParked = parkedAt;
+    await delay(200);
+    await tap('KeyE');
+    await delay(300);
+    check('enterParkedCar', await evaluate('!!CoralGame.vehicles.playerCar'));
+    results.enteredType = await evaluate('CoralGame.vehicles.playerCar && CoralGame.vehicles.playerCar.type.id');
+    // Drive forward with real keys and confirm the car actually moves.
+    const driveStart = await evaluate('[CoralGame.state.player.x, CoralGame.state.player.y]');
+    await setKey('KeyW', true);
+    await delay(2500);
+    await setKey('KeyW', false);
+    const driveEnd = await evaluate('[CoralGame.state.player.x, CoralGame.state.player.y]');
+    const driven = Math.hypot(driveEnd[0] - driveStart[0], driveEnd[1] - driveStart[1]);
+    results.drivenMetres = Math.round(driven);
+    results.carSpeed = await evaluate('CoralGame.vehicles.playerCar.speed');
+    // A compact reaches ~16 m/s by the end of a 2.5 s launch from standstill;
+    // 16 m covered at that speed proves the car answers the keys.
+    check('carDrives', driven > 10 && results.carSpeed > 5);
+    await shot('s2-drive.png');
+    // Damage the driven car hard: smoke must appear (health < 65%).
+    await evaluate('CoralGame.vehicles.damage(CoralGame.vehicles.playerCar, 60)');
+    await delay(1500);
+    check('damageSmokes', await evaluate("CoralGame.vehicles.playerCar.smoke === 1 && CoralGame.vehicles.effects().some(e => e.kind === 'smoke')"));
+    results.carHealth = await evaluate('CoralGame.vehicles.playerCar.health');
+    // Exit, then carjack a moving traffic car: its driver must bail.
+    await tap('KeyE');
+    await delay(300);
+    check('exitCar', await evaluate('!CoralGame.vehicles.playerCar'));
+    await evaluate(`(() => { const v = CoralGame.vehicles; const p = CoralGame.state.player; const c = v.cars.filter(c => c.ai && c.driver)[0]; if (!c) return false; p.x = c.x + 30; p.y = c.y; return true; })()`);
+    await delay(150);
+    await tap('KeyE');
+    await delay(300);
+    check('carjackingWorks', await evaluate("!!CoralGame.vehicles.playerCar && CoralGame.vehicles.events.some(e => e.type === 'carjacking') && CoralGame.vehicles.drivers.length > 0"));
+    // Traffic must be alive, moving, and never inside a building.
+    const aiBefore = await evaluate("CoralGame.vehicles.cars.filter(c => c.ai).length");
+    const aiPos = await evaluate("CoralGame.vehicles.cars.filter(c => c.ai).slice(0, 5).map(c => [Math.round(c.x), Math.round(c.y)])");
+    await delay(3000);
+    const aiPosAfter = await evaluate("CoralGame.vehicles.cars.filter(c => c.ai).slice(0, 5).map(c => [Math.round(c.x), Math.round(c.y)])");
+    const aiMoved = aiPos.some((p, i) => aiPosAfter[i] && Math.hypot(aiPosAfter[i][0] - p[0], aiPosAfter[i][1] - p[1]) > 5);
+    results.aiCount = aiBefore;
+    check('trafficMoves', aiMoved);
+    check('trafficNotInBuildings', await evaluate("CoralGame.vehicles.cars.every(c => !CoralGame.world.buildingAt(c.x, c.y))"));
+    await shot('s2-traffic.png');
+    // Reload: traffic must repopulate to its district target, not drain away.
+    await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/index.html` });
+    await delay(1200);
+    await tap('Enter');
+    await delay(8000);
+    const aiAfterReload = await evaluate("CoralGame.vehicles.cars.filter(c => c.ai).length");
+    results.aiCountAfterReload = aiAfterReload;
+    check('trafficStableAfterReload', aiAfterReload >= 6 && aiAfterReload <= 20);
     check('noRuntimeErrors', runtimeErrors.length === 0);
     results.runtimeErrors = runtimeErrors;
   } catch (error) {
@@ -107,5 +164,5 @@ server.listen(0, '127.0.0.1', async () => {
   }
   console.log(JSON.stringify(results, null, 2));
   if (failures.length) { console.error('FAILURES:', failures.join(', ')); process.exit(1); }
-  console.log('S1 ACCEPTANCE: PASS');
+  console.log('S2 ACCEPTANCE: PASS');
 });
