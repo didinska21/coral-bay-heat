@@ -28,6 +28,15 @@ cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
 mkdirSync(join(out, 'screenshots'), { recursive: true });
 if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
 
+// Entry contract (S5): exactly the four staged shots, named N-name.jpg —
+// a starter screenshot left in screenshots/ would otherwise ship
+// silently, so refuse loudly here before the dossier is built.
+const entryShots = readdirSync(join(here, 'screenshots')).sort();
+if (entryShots.length !== 4) throw new Error('screenshots/: expected 4 entry shots, found ' + entryShots.length);
+for (const n of entryShots) {
+  if (!/^[1-4]-[a-z]+\.jpe?g$/.test(n)) throw new Error('screenshots/: unexpected entry file ' + n + ' — remove it before handing in');
+}
+
 // The scorer's own caps (reference/gate.json): only text_max_bytes shapes the bytes; the others refuse an entry the
 // scorer would refuse (more than 4 screenshots or one over 256 KiB; more than 993 files in game/ or 48 MiB of game
 // files, in all, or a path under game/ over 1000 bytes: game/ counts beside /output's own 1000-entry cap, its

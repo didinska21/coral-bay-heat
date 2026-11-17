@@ -292,7 +292,7 @@ var CoralMissions = (function () {
       }
       if (def.id === 'm5') api.storyComplete = true;
       def.outro.forEach(function (line) { say(line.who, line.text); });
-      api.banner = { title: 'MISSION PASSED', sub: def.title + '  —  +$' + reward, until: state.elapsed + 3.5 };
+      api.banner = { title: 'MISSION PASSED', sub: def.title + ' — +$' + reward, until: state.elapsed + 3.5 };
       notify('+$' + reward + '  ·  ' + def.title + ' complete', 5);
       police.setMission(0, false);
       state.lightLock = null;
