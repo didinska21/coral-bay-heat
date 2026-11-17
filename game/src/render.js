@@ -281,14 +281,22 @@ var CoralRender = (function () {
           text('AIMING', a.x - 14, a.y - 22, 7, '#fff0cc', 800);
         });
       }
-      /* Night shade and the sunset wash, both driven by the day fraction. */
-      var shade = state.day < 0.46 ? 0 : state.day < 0.55 ? (state.day - 0.46) * 1.45 : state.day < 0.86 ? 0.13 : Math.max(0, 0.13 - (state.day - 0.86) * 0.9);
+      /* Sun elevation from the day fraction (S5 fix — the old mapping had
+         noon dark and midnight bright): 0.25 sunrise, 0.5 noon, 0.75
+         sunset, 0/1 midnight. Night is a navy shade up to 0.45; near the
+         horizon the sky warms — pink at dawn, orange at dusk. */
+      var sun = Math.sin((state.day - 0.25) * TAU);
+      var shade = sun < 0 ? Math.min(0.45, -sun * 0.45) : 0;
       if (shade > 0) {
         ctx.fillStyle = 'rgba(25,36,64,' + shade + ')';
         ctx.fillRect(view.x, view.y, vw, vh);
       }
-      if (state.day > 0.36 && state.day < 0.57) {
-        ctx.fillStyle = 'rgba(252,116,76,' + (0.13 * (1 - Math.abs(state.day - 0.465) / 0.105)) + ')';
+      var horizon = 1 - Math.abs(sun) / 0.35;
+      if (horizon > 0) {
+        var dawn = state.day < 0.5;
+        ctx.fillStyle = dawn
+          ? 'rgba(250,150,170,' + (0.18 * horizon) + ')'
+          : 'rgba(252,116,76,' + (0.22 * horizon) + ')';
         ctx.fillRect(view.x, view.y, vw, vh);
       }
       ctx.restore();
@@ -320,6 +328,33 @@ var CoralRender = (function () {
       ctx.beginPath();
       ctx.moveTo(sx, sy - 23); ctx.lineTo(sx - 5, sy - 15); ctx.lineTo(sx + 5, sy - 15);
       ctx.closePath(); ctx.fill();
+      /* Pedestrians, in screen space like Mara (same scale, so they read
+         at any zoom); fleeing ones carry the same "!" as fleeing drivers.
+         During the final delivery Mara carries the money bag: a small gold
+         case at her side, so the handover reads in the dawn shot. */
+      if (state.pedestrians) {
+        state.pedestrians.walkers.forEach(function (w) {
+          var wx = (w.x - view.x) * zoom, wy = (w.y - view.y) * zoom;
+          if (wx < -12 || wx > view.width + 12 || wy < -12 || wy > view.height + 12) return;
+          ctx.fillStyle = w.color;
+          ctx.beginPath(); ctx.arc(wx, wy, 5, 0, TAU); ctx.fill();
+          if (w.flee > 0) {
+            ctx.fillStyle = '#fff3d6';
+            ctx.font = '700 11px system-ui';
+            ctx.textAlign = 'center';
+            ctx.fillText('!', wx, wy - 9);
+            ctx.textAlign = 'left';
+          }
+        });
+      }
+      if (state.missions && state.missions.active && state.missions.active.def.id === 'm5' &&
+          state.missions.active.stageIndex === 1 && (!state.vehicles || !state.vehicles.playerCar)) {
+        ctx.fillStyle = '#e8b23a';
+        ctx.fillRect(sx + 8, sy - 1, 7, 6);
+        ctx.strokeStyle = '#8a6a1f';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(sx + 8, sy - 1, 7, 6);
+      }
     }
     function overlay(state, screen) {
       var district = state.district.name;

@@ -85,7 +85,7 @@ var CoralMissions = (function () {
           { type: 'driveTo', x: gull.x, y: gull.y, r: 45, text: 'Deliver the package to The Gilded Gull' },
           { type: 'driveTo', x: workshop.x, y: workshop.y, r: 45, text: 'Return to Voss & Sons Motors' }
         ] },
-      { id: 'm2', title: 'Neon Errand', light: 0.50,
+      { id: 'm2', title: 'Neon Errand', light: 0.78,
         intro: [
           { who: 'SAL', text: 'My courier is waiting at Palmetto Pawn. Casa Sirena. One hundred and fifty seconds.' },
           { who: 'TITO', text: 'Sal\'s guards don\'t like sharing the road. Keep the courier breathing.' }
@@ -95,7 +95,7 @@ var CoralMissions = (function () {
           { type: 'goto', x: pawn.x, y: pawn.y, r: 40, text: 'Meet Sal\'s courier at Palmetto Pawn' },
           { type: 'driveTo', x: sirena.x, y: sirena.y, r: 45, time: cfg.timers.m2, text: 'Deliver the courier to Casa Sirena' }
         ] },
-      { id: 'm3', title: 'Borrowed Wheels', light: 0.60,
+      { id: 'm3', title: 'Borrowed Wheels', light: 0.85,
         intro: [
           { who: 'TITO', text: 'A Vantara Sable is sitting at the Coral Crown valet. Unlocked. Practically begging.' },
           { who: 'MARA', text: 'Borrowed. We\'re borrowing it. Say it with me.' }
@@ -107,7 +107,7 @@ var CoralMissions = (function () {
           { type: 'recover', text: 'Get the Sable back' },
           { type: 'driveTo', x: workshop.x, y: workshop.y, r: 45, time: cfg.timers.m3Hide, text: 'Hide the Sable at the workshop' }
         ] },
-      { id: 'm4', title: 'Mangrove Run', light: 0.70,
+      { id: 'm4', title: 'Mangrove Run', light: 0.95,
         intro: [
           { who: 'SAL', text: 'A case sits in the marina warehouse. Three guards. Bring it to the mangroves.' },
           { who: 'MARA', text: 'And the cops?' },
@@ -120,7 +120,7 @@ var CoralMissions = (function () {
           { type: 'driveTo', x: mangroveHideout.x, y: mangroveHideout.y, r: 50, text: 'Escape to the mangrove hideout' },
           { type: 'laylow', text: 'Lay low until the heat dies down' }
         ] },
-      { id: 'm5', title: 'Gilded Sunrise', light: 0.90,
+      { id: 'm5', title: 'Gilded Sunrise', light: 0.24,
         intro: [
           { who: 'SAL', text: 'Three bags. Boardwalk, Downtown, Marina. Dawn is the deadline.' },
           { who: 'MARA', text: 'Then we\'re done. All of it.' }

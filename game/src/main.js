@@ -16,6 +16,7 @@
   var crimeEvents = [];
   var vehicles = CoralVehicles.create(world, crimeEvents);
   var traffic = CoralTraffic.create(world, vehicles);
+  var pedestrians = CoralPedestrians.create(world);
   var start = world.safeSpawn();
   var state = {
     player: { x: start.x, y: start.y },
@@ -23,7 +24,7 @@
     elapsed: 0, muted: false, fail: null, failCause: '', camera: null,
     vehicles: vehicles, traffic: traffic, crimeEvents: crimeEvents,
     money: 0, notifications: [], lightLock: null, news: '',
-    hasSave: false, saveSummary: null
+    hasSave: false, saveSummary: null, pedestrians: pedestrians, frozen: false
   };
   var combat = CoralCombat.create(world, vehicles, crimeEvents, state.player);
   var police = CoralPolice.create(world, vehicles, crimeEvents, combat);
@@ -126,6 +127,7 @@
        to step the cars, the fleeing drivers and the damage particles. */
     vehicles.update(dt, state.player, axis, input.held('Space'));
     traffic.update(dt, state);
+    pedestrians.update(dt, state);
     renderer.aim(input.mouse);
     police.update(dt, state);
     combat.update(dt, state, input);
@@ -213,7 +215,7 @@
     } else if (screen === 'failed' && input.take('Enter')) {
       retry();
     }
-    if (screen === 'play') update(dt);
+    if (screen === 'play' && !state.frozen) update(dt);
     else state.dt = dt;
     renderer.draw(world, state, screen);
     hud.draw(world, state, screen);
@@ -224,6 +226,7 @@
     state: state, world: world, input: input, renderer: renderer,
     vehicles: vehicles, traffic: traffic, combat: combat, police: police,
     crimeEvents: crimeEvents, missions: missions, hud: hud, audio: audio,
+    pedestrians: pedestrians,
     save: CoralSave, retry: retry, continueGame: continueGame, newGame: newGame
   };
   status.textContent = 'Coral Bay Heat. Press Enter to enter the city.';
