@@ -3,7 +3,7 @@
 var GameInput = (function () {
   function create(canvas) {
     var held = Object.create(null), pressed = Object.create(null);
-    var mouse = { x: 0, y: 0, down: false };
+    var mouse = { x: 0, y: 0, down: false, worldX: 0, worldY: 0 };
     var WATCHED = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'KeyE', 'KeyF', 'KeyP', 'KeyM', 'KeyH', 'Enter', 'Space', 'Escape'];
     window.addEventListener('keydown', function (event) {
       if (WATCHED.indexOf(event.code) < 0) return;
@@ -12,7 +12,7 @@ var GameInput = (function () {
       held[event.code] = true;
     });
     window.addEventListener('keyup', function (event) { held[event.code] = false; });
-    window.addEventListener('blur', function () { held = Object.create(null); });
+    window.addEventListener('blur', function () { held = Object.create(null); mouse.down = false; });
     canvas.addEventListener('pointermove', function (event) { mouse.x = event.clientX; mouse.y = event.clientY; });
     canvas.addEventListener('pointerdown', function () { mouse.down = true; pressed.pointer = true; });
     window.addEventListener('pointerup', function () { mouse.down = false; });

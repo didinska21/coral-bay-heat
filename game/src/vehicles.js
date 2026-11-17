@@ -5,8 +5,8 @@
    module will read in S3 — nothing here talks to police directly. */
 var CoralVehicles = (function () {
   var types = GAME_CONFIG.vehicles.types;
-  function create(world) {
-    var cars = [], effects = [], drivers = [], events = [], playerCar = null, serial = 1;
+  function create(world, crimeEvents) {
+    var cars = [], effects = [], drivers = [], events = crimeEvents || [], playerCar = null, serial = 1;
     var random = SeededRandom.create(GAME_CONFIG.city.seed + 22);
 
     function typeFor(id) {
@@ -76,7 +76,9 @@ var CoralVehicles = (function () {
           damage(otherCar, Math.max(3, impact * 0.65));
           otherCar.speed *= -0.25;
         }
-        events.push({ type: 'collision', car: car, x: car.x, y: car.y, impact: impact });
+        /* Only the player's own crashes are crimes — AI fender-benders
+           must not feed the police queue (S3). */
+        if (car === playerCar && impact > 3) events.push({ type: 'collision', car: car, x: car.x, y: car.y, impact: impact });
         effects.push({ x: car.x, y: car.y, life: 0.55, kind: 'impact' });
         if (blockedBy) {
           var cx = Math.max(blockedBy.x, Math.min(x, blockedBy.x + blockedBy.w));
@@ -157,6 +159,14 @@ var CoralVehicles = (function () {
       });
     }
 
+    function spawnPolice(x, y, angle) {
+      var c = make(x, y, typeFor('police'), '#f0eee2', angle, false);
+      c.police = true;
+      c.driver = true;
+      cars.push(c);
+      return c;
+    }
+
     function spawnTraffic(count, district) {
       var made = 0, tries = 0;
       while (made < count && tries++ < count * 30) {
@@ -207,8 +217,9 @@ var CoralVehicles = (function () {
         car.lastY = car.y;
         car.horn = Math.max(0, car.horn - dt);
         /* A car that was knocked rolling (rammed, or a driver bailed mid-roll)
-           coasts to a stop on its own. */
-        if (!car.ai && Math.abs(car.speed) > 0.1) {
+           coasts to a stop on its own. Police cars are driven by the police
+           module, never by this coast branch. */
+        if (!car.ai && !car.police && Math.abs(car.speed) > 0.1) {
           car.speed *= Math.max(0, 1 - dt * 3);
           collide(car, car.x + Math.cos(car.angle) * car.speed * dt, car.y + Math.sin(car.angle) * car.speed * dt);
         }
@@ -222,6 +233,7 @@ var CoralVehicles = (function () {
       });
       drivers.forEach(function (d) {
         d.life -= dt;
+        if (d.health <= 0) return;
         var nx = d.x + d.dx * dt * 16, ny = d.y + d.dy * dt * 16;
         if (!world.buildingAt(nx, ny)) { d.x = nx; d.y = ny; }
         else { var tmp = d.dx; d.dx = -d.dy; d.dy = tmp; }
@@ -232,14 +244,15 @@ var CoralVehicles = (function () {
         if (e.kind === 'smoke') e.y -= dt * 9;
       });
       effects = effects.filter(function (e) { return e.life > 0; });
-      if (events.length > 128) events.splice(0, events.length - 128);
+      /* No truncation here: the police module owns the shared queue and
+         drains it every frame (S3). */
     }
 
     return {
       cars: cars, drivers: drivers, events: events,
       get playerCar() { return playerCar; },
       enter: enter, exit: exit, update: update, damage: damage,
-      shotAt: shotAt, spawnTraffic: spawnTraffic, move: collide,
+      shotAt: shotAt, spawnTraffic: spawnTraffic, spawnPolice: spawnPolice, move: collide,
       clearAt: clearAt, nearest: nearest,
       effects: function () { return effects; }
     };

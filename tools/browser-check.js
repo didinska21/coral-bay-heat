@@ -153,6 +153,81 @@ server.listen(0, '127.0.0.1', async () => {
     const aiAfterReload = await evaluate("CoralGame.vehicles.cars.filter(c => c.ai).length");
     results.aiCountAfterReload = aiAfterReload;
     check('trafficStableAfterReload', aiAfterReload >= 6 && aiAfterReload <= 20);
+    // ---- S3: police + combat ----
+    // Stage a real traffic car on a clear road, then drive it with keyboard input.
+    await evaluate(`(() => {
+      const g=CoralGame; g.police.reset(); g.state.player.x=1520; g.state.player.y=1150;
+      g.vehicles.spawnTraffic(5,'Downtown');
+      const c=g.vehicles.cars.find(c=>c.ai); if(!c) throw Error('no traffic car');
+      c.x=1520;c.y=1150;c.angle=0;c.speed=0;g.state.player.x=c.x;g.state.player.y=c.y;
+      g.vehicles.enter(g.state.player); window.driveStart=c.x; return true;
+    })()`);
+    await key('KeyW', true); await delay(2200); await key('KeyW', false);
+    check('drivingWithTraffic', await evaluate(`CoralGame.vehicles.playerCar.x > driveStart + 5 && CoralGame.vehicles.cars.some(c=>c.ai)`));
+    check('trafficSurvivesRefresh', await evaluate(`(() => { const g=CoralGame; for(let i=0;i<5;i++)g.traffic.update(12.1,g.state); return g.vehicles.cars.filter(c=>c.ai).length>0; })()`));
+    // A witnessed theft starts a delayed report. Keep a stationary civilian nearby.
+    await evaluate(`(() => {
+      const g=CoralGame;g.retry();g.state.player.x=1520;g.state.player.y=1150;
+      const c=g.vehicles.cars.find(c=>c.ai);c.x=1520;c.y=1150;c.speed=0;
+      g.vehicles.enter(g.state.player);g.vehicles.exit(g.state.player);
+      g.vehicles.drivers.push({x:1545,y:1150,dx:0,dy:0,life:100,health:65}); return true;
+    })()`);
+    await delay(4500);
+    check('witnessedCarjacking', await evaluate('CoralGame.police.stars===1'));
+    // Accelerate deterministic simulation inside Chromium for incident sequences.
+    await evaluate(`window.stepPolice=(seconds)=>{const g=CoralGame;for(let t=0;t<seconds;t+=.05){g.state.elapsed+=.05;g.state.district=g.world.districtAt(g.state.player.x,g.state.player.y);g.police.update(.05,g.state);}};true`);
+    check('crimeEscalationAndRoadblock', await evaluate(`(() => {
+      const g=CoralGame, levels=[g.police.stars];
+      for(let i=0;i<3;i++) {g.crimeEvents.push({type:'collision',x:g.state.player.x,y:g.state.player.y});stepPolice(4.2);levels.push(g.police.stars);}
+      window.crimeLevels=levels; return levels.join(',')==='1,2,3,4' && !!g.police.roadblock;
+    })()`));
+    check('fiveReservedForFinal', await evaluate(`(() => {const g=CoralGame;g.crimeEvents.push({type:'pedestrianHit',x:g.state.player.x,y:g.state.player.y});stepPolice(4.2);return g.police.stars===4;})()`));
+    check('fiveThroughFinalStageCrime', await evaluate(`(() => {const g=CoralGame;g.police.setMission(0,true);g.crimeEvents.push({type:'pedestrianHit',x:g.state.player.x,y:g.state.player.y});stepPolice(4.2);return g.police.stars===5;})()`));
+    results.crimeLevels = await evaluate('crimeLevels.concat(CoralGame.police.stars)');
+    check('spawnsOutOfView140To200', await evaluate('CoralGame.police.spawnLog.length>0 && CoralGame.police.spawnLog.every(s=>s.distance>=140 && s.distance<=200 && s.outsideView)'));
+    await shot('s3-chase.png');
+    // Hide far from last known position on a mangrove dirt road; run the real countdown.
+    await evaluate(`(() => {const g=CoralGame;g.state.player.x=260;g.state.player.y=2230;return true;})()`);
+    await evaluate('stepPolice(1)');
+    check('searchingVisible', await evaluate('CoralGame.police.searching && CoralGame.police.escapeElapsed>0'));
+    await evaluate('stepPolice(32)');
+    results.escapeState = await evaluate(`(() => {const p=CoralGame.police;return {stars:p.stars,searching:p.searching,elapsed:p.escapeElapsed,duration:p.escapeDuration,visible:p.visible,lastKnown:p.lastKnown,units:p.units.length,block:!!p.roadblock};})()`);
+    check('escapeFiveToZero', await evaluate('CoralGame.police.stars===0'));
+    // Stage two responding cars on opposing sides; the real game must wait 3 seconds.
+    await evaluate(`(() => {
+      const g=CoralGame;g.retry();g.state.player.x=1700;g.state.player.y=1330;g.police.setMission(2,false);
+      for(const p of [{x:1700,y:1290},{x:1700,y:1370}]){const c=g.vehicles.spawnPolice(p.x,p.y,0);c.block=true;g.police.units.push(c);c.shotCooldown=0;}
+      return true;
+    })()`);
+    await evaluate('stepPolice(1)');
+    check('noInstantArrest', await evaluate("CoralGame.screen==='play' && CoralGame.police.arrestElapsed>0 && CoralGame.police.arrestElapsed<3"));
+    await evaluate('stepPolice(2.2)'); await delay(500);
+    check('busted', await evaluate("CoralGame.screen==='failed' && CoralGame.state.fail==='BUSTED' && CoralGame.state.player.health>0"));
+    await shot('s3-busted.png');
+    await tap('Enter');
+    check('retry', await evaluate("CoralGame.screen==='play' && CoralGame.state.player.health===100 && CoralGame.police.stars===0"));
+    // Verify pistol aim, a projectile hit, knockback, and punch against a mission enemy.
+    await evaluate(`window.stepCombat=(seconds)=>{const g=CoralGame;for(let t=0;t<seconds;t+=.05){g.state.elapsed+=.05;g.input.mouse.worldX=1700;g.input.mouse.worldY=1365;g.combat.update(.05,g.state,g.input);}};(() => {const g=CoralGame;g.state.player.x=1700;g.state.player.y=1330;g.combat.spawnEnemy(1700,1365,{active:false});return true;})()`);
+    await delay(1600);
+    const aim = await evaluate(`(() => {const c=CoralGame.state.camera;return {x:(1700-c.x)*c.zoom,y:(1365-c.y)*c.zoom};})()`);
+    await send('Input.dispatchMouseEvent', { type:'mouseMoved', x:aim.x, y:aim.y });
+    await send('Input.dispatchMouseEvent', { type:'mousePressed', x:aim.x, y:aim.y, button:'left', clickCount:1 });
+    await delay(100);
+    await send('Input.dispatchMouseEvent', { type:'mouseReleased', x:aim.x, y:aim.y, button:'left', clickCount:1 });
+    await evaluate('stepCombat(0.3)');
+    check('pistolHitAndKnockback', await evaluate('CoralGame.combat.enemies[0].health===41 && CoralGame.combat.enemies[0].y>1365'));
+    await evaluate('CoralGame.combat.enemies[0].y=CoralGame.state.player.y+15;true'); await tap('KeyF');
+    check('closePunch', await evaluate('CoralGame.combat.enemies[0].health===11'));
+    // Low stars never shoot; at three the visible aim pause precedes live police fire.
+    await evaluate(`(() => {const g=CoralGame;g.retry();g.state.player.x=1700;g.state.player.y=1330;g.police.setMission(2,false);for(const p of [{x:1700,y:1280},{x:1700,y:1380}]){const c=g.vehicles.spawnPolice(p.x,p.y,Math.PI);c.block=true;c.shotCooldown=0;g.police.units.push(c);}return true;})()`);
+    await evaluate('stepPolice(1.5)');
+    check('noPoliceShootingAtTwo', await evaluate('CoralGame.state.player.health===100 && CoralGame.police.units.every(c=>!c.aim)'));
+    await evaluate('CoralGame.police.setMission(3,false);stepPolice(0.55);true');
+    check('aimTelegraphBeforeDamage', await evaluate('CoralGame.police.units.some(c=>c.aim>0) && CoralGame.state.player.health===100'));
+    await evaluate('stepPolice(1.2);stepCombat(1.2)');
+    check('policeProjectileDamage', await evaluate('CoralGame.state.player.health<100'));
+    await evaluate('CoralGame.state.player.health=9;true'); await delay(4000);
+    check('wasted', await evaluate("CoralGame.screen==='failed' && CoralGame.state.fail==='WASTED' && CoralGame.state.player.health===0"));
     check('noRuntimeErrors', runtimeErrors.length === 0);
     results.runtimeErrors = runtimeErrors;
   } catch (error) {
@@ -164,5 +239,5 @@ server.listen(0, '127.0.0.1', async () => {
   }
   console.log(JSON.stringify(results, null, 2));
   if (failures.length) { console.error('FAILURES:', failures.join(', ')); process.exit(1); }
-  console.log('S2 ACCEPTANCE: PASS');
+  console.log('S3 ACCEPTANCE: PASS');
 });

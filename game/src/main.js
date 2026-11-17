@@ -1,5 +1,7 @@
 /* Boot and the one loop: read input, step the player, paint the frame.
-   Screens: title, play, paused. The day clock runs on a 10-minute cycle
+   Screens: title, play, paused, failed (BUSTED / WASTED with retry).
+   Update order per 01: input → player/vehicles → traffic → police →
+   combat → district/clock. The day clock runs on a 10-minute cycle
    (07: mission-locked lighting comes later; S1 just runs the cycle).
    window.CoralGame exposes the live state for the automated acceptance
    checks and for the next build sessions — it is a debug handle, not a cheat. */
@@ -9,14 +11,20 @@
   var world = CoralWorld.create();
   var input = GameInput.create(canvas);
   var renderer = CoralRender.create(canvas);
-  var vehicles = CoralVehicles.create(world);
+  var crimeEvents = [];
+  var vehicles = CoralVehicles.create(world, crimeEvents);
   var traffic = CoralTraffic.create(world, vehicles);
   var start = world.safeSpawn();
   var state = {
     player: { x: start.x, y: start.y },
     dt: 0, day: 0.38, clock: '', district: world.districtAt(start.x, start.y),
-    elapsed: 0, muted: false, vehicles: vehicles, traffic: traffic
+    elapsed: 0, muted: false, fail: null, camera: null,
+    vehicles: vehicles, traffic: traffic, crimeEvents: crimeEvents
   };
+  var combat = CoralCombat.create(world, vehicles, crimeEvents, state.player);
+  var police = CoralPolice.create(world, vehicles, crimeEvents, combat);
+  state.combat = combat;
+  state.police = police;
   var screen = 'title';
   var last = performance.now();
   var lastDistrict = state.district.name;
@@ -38,7 +46,7 @@
       else if (!vehicles.playerCar) status.textContent = 'On foot in ' + state.district.name + '.';
     }
     if (vehicles.playerCar) {
-      vehicles.update(dt, state.player, axis, input.held('Space'));
+      /* Driving is stepped by vehicles.update below, once per frame. */
     } else {
       var length = Math.hypot(axis.x, axis.y) || 1;
       /* Speed is metres per second; dt is seconds. No extra multiplier. */
@@ -49,7 +57,18 @@
       if (!world.buildingAt(nextX, state.player.y)) state.player.x = nextX;
       if (!world.buildingAt(state.player.x, nextY)) state.player.y = nextY;
     }
+    /* vehicles.update runs every frame now (S3 fix): on foot it still has
+       to step the cars, the fleeing drivers and the damage particles. */
+    vehicles.update(dt, state.player, axis, input.held('Space'));
     traffic.update(dt, state);
+    renderer.aim(input.mouse);
+    police.update(dt, state);
+    combat.update(dt, state, input);
+    if (state.player.health <= 0) state.fail = 'WASTED';
+    if (state.fail) {
+      screen = 'failed';
+      status.textContent = state.fail + ': ' + (state.fail === 'WASTED' ? combat.cause : police.cause);
+    }
     state.district = world.districtAt(state.player.x, state.player.y);
     if (state.district.name !== lastDistrict) {
       lastDistrict = state.district.name;
@@ -59,6 +78,18 @@
     state.day = (state.elapsed / GAME_CONFIG.city.cycle + 0.26) % 1;
     state.clock = formatClock(state.day);
     state.dt = dt;
+  }
+
+  function retry() {
+    vehicles.exit(state.player);
+    police.reset();
+    combat.reset();
+    var spawn = world.safeSpawn();
+    state.player.x = spawn.x;
+    state.player.y = spawn.y;
+    state.fail = null;
+    screen = 'play';
+    last = performance.now();
   }
 
   function frame(now) {
@@ -78,6 +109,8 @@
     } else if (screen === 'paused' && (input.take('KeyP') || input.take('Escape') || input.take('Enter'))) {
       screen = 'play';
       last = now;
+    } else if (screen === 'failed' && input.take('Enter')) {
+      retry();
     }
     if (screen === 'play') update(dt);
     else state.dt = dt;
@@ -87,7 +120,8 @@
   window.CoralGame = {
     get screen() { return screen; },
     state: state, world: world, input: input, renderer: renderer,
-    vehicles: vehicles, traffic: traffic
+    vehicles: vehicles, traffic: traffic, combat: combat, police: police,
+    crimeEvents: crimeEvents, retry: retry
   };
   status.textContent = 'Coral Bay Heat. Press Enter to enter the city.';
   requestAnimationFrame(frame);

@@ -6,6 +6,7 @@ var CoralRender = (function () {
   function create(canvas) {
     var ctx = canvas.getContext('2d');
     var view = { x: 0, y: 0, scale: 1, width: 0, height: 0 };
+    var zoom = 1, initialized = false;
     function resize() {
       var dpr = window.devicePixelRatio || 1;
       canvas.width = Math.round(window.innerWidth * dpr);
@@ -28,14 +29,19 @@ var CoralRender = (function () {
     }
     function worldDraw(world, state) {
       var px = state.player.x, py = state.player.y;
-      var vw = view.width, vh = view.height;
+      /* Zoom from the camera height (07): at 720p the view is 320x180 m,
+         so a police spawn 140–200 m out is genuinely off-camera. */
+      zoom = view.height / cfg.camera.height;
+      var vw = view.width / zoom, vh = view.height / zoom;
       /* Camera target: player centred, clamped to the city edges. */
       var tx = Math.max(0, Math.min(cfg.city.width - vw, px - vw * 0.5));
       var ty = Math.max(0, Math.min(cfg.city.height - vh, py - vh * 0.5));
+      if (!initialized) { view.x = tx; view.y = ty; initialized = true; }
       view.x += (tx - view.x) * Math.min(1, state.dt * cfg.camera.follow);
       view.y += (ty - view.y) * Math.min(1, state.dt * cfg.camera.follow);
+      state.camera = { x: view.x, y: view.y, width: vw, height: vh, zoom: zoom };
       ctx.save();
-      ctx.scale(view.scale, view.scale);
+      ctx.scale(view.scale * zoom, view.scale * zoom);
       ctx.translate(-view.x, -view.y);
       /* Ground, beach and sea to the east. */
       ctx.fillStyle = '#dfc58c';
@@ -158,9 +164,11 @@ var CoralRender = (function () {
           if (car.type.id === 'police') {
             ctx.fillStyle = '#e8e4d2';
             ctx.fillRect(-4, -9, 8, 16);
-            ctx.fillStyle = '#d34e47';
+            /* Strobe: red and blue take turns being the bright one. */
+            var lit = Math.sin(state.elapsed * 18) > 0;
+            ctx.fillStyle = lit ? '#ff473e' : '#5a2320';
             ctx.fillRect(-2, -9, 4, 5);
-            ctx.fillStyle = '#3a7bd5';
+            ctx.fillStyle = lit ? '#22384f' : '#3a7bd5';
             ctx.fillRect(-2, 4, 4, 5);
           }
           if (car.door > 0) {
@@ -221,6 +229,57 @@ var CoralRender = (function () {
           }
         });
       }
+      /* Roadblock: striped barriers at the blocking car, labelled. */
+      if (state.police && state.police.roadblock) {
+        var rb = state.police.roadblock;
+        ctx.fillStyle = '#f4c264';
+        ctx.fillRect(rb.x - 24, rb.y - 19, 8, 7);
+        ctx.fillRect(rb.x + 17, rb.y - 19, 8, 7);
+        text('ROADBLOCK', rb.x - 31, rb.y - 29, 8, '#ffe6b0', 800);
+      }
+      /* Combat: mission enemies with health ticks, live bullets, muzzle
+         flashes and hit sparks — plus the dashed aim telegraph from anyone
+         about to shoot at Mara. */
+      if (state.combat) {
+        state.combat.enemies.forEach(function (e) {
+          ctx.fillStyle = e.health <= 0 ? '#675951' : e.hit > 0 ? '#fff5df' : '#a04659';
+          ctx.beginPath();
+          ctx.arc(e.x, e.y, e.health <= 0 ? 4 : 7, 0, TAU);
+          ctx.fill();
+          if (e.health > 0) {
+            ctx.fillStyle = '#ffe0ae';
+            ctx.fillRect(e.x - 8, e.y - 14, 16 * e.health / e.maxHealth, 2);
+          }
+        });
+        state.combat.bullets.forEach(function (b) {
+          ctx.strokeStyle = b.owner === 'player' ? '#fff8bd' : '#ff8462';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(b.x, b.y);
+          ctx.lineTo(b.x - Math.cos(b.angle) * 6, b.y - Math.sin(b.angle) * 6);
+          ctx.stroke();
+        });
+        state.combat.effects.forEach(function (e) {
+          ctx.fillStyle = e.kind === 'muzzle' ? '#fff5a4' : e.kind === 'hit' ? '#fff5df' : '#ffaf76';
+          ctx.beginPath();
+          ctx.arc(e.x, e.y, e.kind === 'muzzle' ? 5 : 7, 0, TAU);
+          ctx.fill();
+        });
+        var aimers = state.combat.enemies.concat(state.police ? state.police.units : [],
+          state.police && state.police.roadblock ? [state.police.roadblock.car] : []);
+        aimers.forEach(function (a) {
+          if (a.aim <= 0 || a.health <= 0) return;
+          ctx.strokeStyle = '#ff644f';
+          ctx.lineWidth = 0.8;
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(px, py);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          text('AIMING', a.x - 14, a.y - 22, 7, '#fff0cc', 800);
+        });
+      }
       /* Night shade and the sunset wash, both driven by the day fraction. */
       var shade = state.day < 0.46 ? 0 : state.day < 0.55 ? (state.day - 0.46) * 1.45 : state.day < 0.86 ? 0.13 : Math.max(0, 0.13 - (state.day - 0.86) * 0.9);
       if (shade > 0) {
@@ -233,14 +292,29 @@ var CoralRender = (function () {
       }
       ctx.restore();
       /* Mara: coral dot, pale face, and the chevron marker above her so the
-         player is readable at a glance in every district. */
-      var sx = (px - view.x) * view.scale, sy = (py - view.y) * view.scale;
+         player is readable at a glance in every district. Drawn in screen
+         space (after the world transform), so she stays readable at any
+         zoom. Hidden while driving — the chevron over the car marks her. */
+      ctx.setTransform(view.scale, 0, 0, view.scale, 0, 0);
+      var sx = (px - view.x) * zoom, sy = (py - view.y) * zoom;
       ctx.fillStyle = 'rgba(22,40,40,.26)';
       ctx.beginPath(); ctx.ellipse(sx, sy + 10, 12, 5, 0, 0, TAU); ctx.fill();
-      ctx.fillStyle = cfg.palette.coral;
-      ctx.beginPath(); ctx.arc(sx, sy, 8, 0, TAU); ctx.fill();
-      ctx.fillStyle = '#ffb39a';
-      ctx.beginPath(); ctx.arc(sx - 2, sy - 3, 3, 0, TAU); ctx.fill();
+      if (!state.vehicles || !state.vehicles.playerCar) {
+        ctx.fillStyle = state.player.hit > 0 ? '#fff5df' : cfg.palette.coral;
+        ctx.beginPath(); ctx.arc(sx, sy, 8, 0, TAU); ctx.fill();
+        ctx.fillStyle = '#ffb39a';
+        ctx.beginPath(); ctx.arc(sx - 2, sy - 3, 3, 0, TAU); ctx.fill();
+      }
+      /* Aim tick: where the pistol points, so firing never feels blind. */
+      if (state.combat && state.combat.pistolUnlocked) {
+        var a = state.combat.aim;
+        ctx.strokeStyle = '#ffe6bd';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(sx + Math.cos(a) * 9, sy + Math.sin(a) * 9);
+        ctx.lineTo(sx + Math.cos(a) * 18, sy + Math.sin(a) * 18);
+        ctx.stroke();
+      }
       ctx.fillStyle = '#15383a';
       ctx.beginPath();
       ctx.moveTo(sx, sy - 23); ctx.lineTo(sx - 5, sy - 15); ctx.lineTo(sx + 5, sy - 15);
@@ -255,6 +329,29 @@ var CoralRender = (function () {
       text('CORAL BAY  /  ' + state.clock, 42, 77, 13, '#a6c7bb', 500);
       roundRect(view.width / 2 - 76, 20, 152, 36, 3, 'rgba(17,37,40,.74)');
       text('MARA VOSS', view.width / 2 - 58, 44, 14, cfg.palette.paper, 700);
+      /* Wanted panel (S3): health bar, stars, SEARCHING countdown, arrest
+         warning. Stars blink while the police are searching. */
+      if (state.police) {
+        var p = state.police, hx = view.width - 250;
+        roundRect(hx, 20, 228, 103, 4, 'rgba(17,37,40,.88)');
+        text('HEALTH  ' + Math.ceil(state.player.health), hx + 15, 43, 12, '#fff5df', 700);
+        ctx.fillStyle = '#4c5750';
+        ctx.fillRect(hx + 15, 51, 196, 5);
+        ctx.fillStyle = cfg.palette.coral;
+        ctx.fillRect(hx + 15, 51, 196 * state.player.health / state.player.maxHealth, 5);
+        text('★'.repeat(p.stars) + '☆'.repeat(5 - p.stars), hx + 15, 80, 21,
+          p.searching && Math.sin(state.elapsed * 6) < 0 ? '#857f66' : '#ffcf78', 800);
+        text(p.searching ? 'SEARCHING  ' + Math.max(0, p.escapeDuration - p.escapeElapsed).toFixed(1) + 's'
+          : p.stars ? 'POLICE PURSUIT' : 'PISTOL  /  F TO PUNCH', hx + 15, 102, 11, '#fff0d2', 700);
+        if (p.searching) {
+          ctx.fillStyle = '#42aeb0';
+          ctx.fillRect(hx + 15, 111, 196 * Math.max(0, 1 - p.escapeElapsed / p.escapeDuration), 3);
+        }
+        if (p.arrestElapsed > 0) {
+          text('ARREST  ' + (GAME_CONFIG.police.arrestTime - p.arrestElapsed).toFixed(1) + 's — MOVE!',
+            view.width / 2 - 105, 100, 18, '#ffb185', 800);
+        }
+      }
       ctx.fillStyle = 'rgba(17,37,40,.5)';
       ctx.fillRect(0, view.height - 38, view.width, 38);
       text('WASD / ARROWS  MOVE', 24, view.height - 14, 12, '#fff2d3', 600);
@@ -262,6 +359,7 @@ var CoralRender = (function () {
       text('E  ENTER CAR', 350, view.height - 14, 12, '#fff2d3', 600);
       text('P  PAUSE', 480, view.height - 14, 12, '#fff2d3', 600);
       text('M  MUTE', 575, view.height - 14, 12, '#fff2d3', 600);
+      text('E  CAR    MOUSE  AIM / FIRE    F  PUNCH', 24, view.height - 52, 12, '#fff2d3', 700);
       /* Driving HUD: speed + car, and the contextual interaction prompt. */
       if (state.vehicles) {
         var pc = state.vehicles.playerCar;
@@ -287,14 +385,23 @@ var CoralRender = (function () {
         text('A city with its own tide.', x + 28, y + 153, 18, '#e1e5cf', 500);
         roundRect(x + 26, y + 190, 252, 50, 3, cfg.palette.coral);
         text('ENTER THE CITY  [ ENTER ]', x + 45, y + 222, 15, '#19292a', 800);
-        text('WASD / ARROWS  WALK     SHIFT  RUN', x + 27, y + 282, 13, '#e2e1cc', 600);
-        text('P  PAUSE     M  MUTE     MOUSE  LOOK', x + 27, y + 307, 13, '#e2e1cc', 600);
+        text('WASD / ARROWS  MOVE     SHIFT  RUN     E  ENTER / EXIT CAR', x + 27, y + 282, 13, '#e2e1cc', 600);
+        text('MOUSE  AIM / FIRE     F  PUNCH     SPACE  FOOT FIRE / HANDBRAKE', x + 27, y + 307, 13, '#e2e1cc', 600);
+        text('P / ESC  PAUSE     M  MUTE', x + 27, y + 332, 13, '#e2e1cc', 600);
       } else if (screen === 'paused') {
         ctx.fillStyle = 'rgba(12,27,30,.53)';
         ctx.fillRect(0, 0, view.width, view.height);
         text('PAUSED', view.width / 2 - 85, view.height / 2 - 20, 42, '#fff3d6', 800);
-        text('P or ENTER  RESUME', view.width / 2 - 89, view.height / 2 + 20, 14, '#c0d7ca', 600);
-        text('WASD / ARROWS WALK   ·   SHIFT RUN   ·   M MUTE', view.width / 2 - 167, view.height / 2 + 55, 12, '#c0d7ca', 500);
+        text('P / ESC / ENTER  RESUME', view.width / 2 - 100, view.height / 2 + 20, 14, '#c0d7ca', 600);
+        text('WASD / ARROWS MOVE   ·   SHIFT RUN   ·   E ENTER / EXIT CAR', view.width / 2 - 215, view.height / 2 + 55, 12, '#c0d7ca', 500);
+        text('MOUSE AIM / FIRE   ·   F PUNCH   ·   SPACE FOOT FIRE / HANDBRAKE   ·   M MUTE', view.width / 2 - 265, view.height / 2 + 80, 12, '#c0d7ca', 500);
+      } else if (screen === 'failed') {
+        ctx.fillStyle = 'rgba(12,27,30,.78)';
+        ctx.fillRect(0, 0, view.width, view.height);
+        text(state.fail, view.width / 2 - 105, view.height / 2 - 30, 48, cfg.palette.coral, 800);
+        text(state.fail === 'WASTED' ? state.combat.cause : state.police.cause,
+          view.width / 2 - 150, view.height / 2 + 10, 16, '#fff3d6', 600);
+        text('ENTER  RETRY', view.width / 2 - 60, view.height / 2 + 53, 16, '#c0d7ca', 700);
       }
     }
     function draw(world, state, screen) {
@@ -304,9 +411,14 @@ var CoralRender = (function () {
       ctx.setTransform(view.scale, 0, 0, view.scale, 0, 0);
       overlay(state, screen);
     }
+    /* Mouse position in world units, for combat aim. */
+    function aim(mouse) {
+      mouse.worldX = view.x + mouse.x / zoom;
+      mouse.worldY = view.y + mouse.y / zoom;
+    }
     resize();
     window.addEventListener('resize', resize);
-    return { draw: draw, view: view };
+    return { draw: draw, aim: aim, view: view };
   }
   return { create: create };
 }());
