@@ -127,10 +127,12 @@ server.listen(0, '127.0.0.1', async () => {
     check('damageSmokes', await evaluate("CoralGame.vehicles.playerCar.smoke === 1 && CoralGame.vehicles.effects().some(e => e.kind === 'smoke')"));
     results.carHealth = await evaluate('CoralGame.vehicles.playerCar.health');
     // Exit, then carjack a moving traffic car: its driver must bail.
+    // Freeze the chosen car first (stop = 5 s): a traffic car at full speed
+    // can drive out of the 42 m enter range between the staging and the key.
     await tap('KeyE');
     await delay(300);
     check('exitCar', await evaluate('!CoralGame.vehicles.playerCar'));
-    await evaluate(`(() => { const v = CoralGame.vehicles; const p = CoralGame.state.player; const c = v.cars.filter(c => c.ai && c.driver)[0]; if (!c) return false; p.x = c.x + 30; p.y = c.y; return true; })()`);
+    await evaluate(`(() => { const v = CoralGame.vehicles; const p = CoralGame.state.player; const c = v.cars.filter(c => c.ai && c.driver)[0]; if (!c) return false; c.stop = 5; c.speed = 0; p.x = c.x + 30; p.y = c.y; return true; })()`);
     await delay(150);
     await tap('KeyE');
     await delay(300);
@@ -212,7 +214,9 @@ server.listen(0, '127.0.0.1', async () => {
     await tap('Enter');
     check('retry', await evaluate("CoralGame.screen==='play' && CoralGame.state.player.health===100 && CoralGame.police.stars===0"));
     // Verify pistol aim, a projectile hit, knockback, and punch against a mission enemy.
-    await evaluate(`window.stepCombat=(seconds)=>{const g=CoralGame;for(let t=0;t<seconds;t+=.05){g.state.elapsed+=.05;g.input.mouse.worldX=1700;g.input.mouse.worldY=1365;g.combat.update(.05,g.state,g.input);}};(() => {const g=CoralGame;g.state.player.x=1700;g.state.player.y=1330;g.combat.spawnEnemy(1700,1365,{active:false});return true;})()`);
+    // Clear the firing lane first: a traffic car crossing road x=1700 between
+    // the player and the enemy would eat the bullet and make the test flaky.
+    await evaluate(`window.stepCombat=(seconds)=>{const g=CoralGame;for(let t=0;t<seconds;t+=.05){g.state.elapsed+=.05;g.input.mouse.worldX=1700;g.input.mouse.worldY=1365;g.combat.update(.05,g.state,g.input);}};(() => {const g=CoralGame;g.state.player.x=1700;g.state.player.y=1330;g.vehicles.cars.forEach(c => { if (c.ai && Math.hypot(c.x-1700, c.y-1330) < 120) { c.x = 260; c.y = 2230; c.speed = 0; c.target = null; } });g.combat.spawnEnemy(1700,1365,{active:false});return true;})()`);
     await delay(1600);
     const aim = await evaluate(`(() => {const c=CoralGame.state.camera;return {x:(1700-c.x)*c.zoom,y:(1365-c.y)*c.zoom};})()`);
     await send('Input.dispatchMouseEvent', { type:'mouseMoved', x:aim.x, y:aim.y });
