@@ -135,18 +135,92 @@ var CoralRender = (function () {
         ctx.lineWidth = 2;
         ctx.beginPath(); ctx.moveTo(l.x, l.y); ctx.lineTo(l.x + 5, l.y - 5); ctx.stroke();
       });
-      /* Parked cars. */
-      world.parked.forEach(function (car) {
-        ctx.save();
-        ctx.translate(car.x, car.y);
-        ctx.fillStyle = 'rgba(10,20,22,.28)';
-        ctx.fillRect(-14, -5, 32, 15);
-        ctx.fillStyle = car.color;
-        ctx.fillRect(-16, -9, 30, 14);
-        ctx.fillStyle = '#a9c7bf';
-        ctx.fillRect(-8, -7, 12, 7);
-        ctx.restore();
-      });
+      /* Vehicles: every car the vehicle system owns (parked ones included),
+         drawn rotated to their heading; drivers who bailed run on foot. */
+      if (state.vehicles) {
+        state.vehicles.cars.forEach(function (car) {
+          ctx.save();
+          ctx.translate(car.x, car.y);
+          ctx.rotate(car.angle);
+          ctx.fillStyle = 'rgba(10,20,22,.28)';
+          ctx.fillRect(-15, -4, 34, 15);
+          ctx.fillStyle = '#1c2626';
+          ctx.fillRect(-17, -11, 6, 5);
+          ctx.fillRect(-17, 7, 6, 5);
+          ctx.fillRect(11, -11, 6, 5);
+          ctx.fillRect(11, 7, 6, 5);
+          ctx.fillStyle = car.color;
+          ctx.fillRect(-17, -9, 32, 16);
+          ctx.fillStyle = '#a9c7bf';
+          ctx.fillRect(-6, -7, 11, 12);
+          ctx.fillStyle = 'rgba(20,30,32,.55)';
+          ctx.fillRect(8, -7, 5, 12);
+          if (car.type.id === 'police') {
+            ctx.fillStyle = '#e8e4d2';
+            ctx.fillRect(-4, -9, 8, 16);
+            ctx.fillStyle = '#d34e47';
+            ctx.fillRect(-2, -9, 4, 5);
+            ctx.fillStyle = '#3a7bd5';
+            ctx.fillRect(-2, 4, 4, 5);
+          }
+          if (car.door > 0) {
+            ctx.fillStyle = car.color;
+            ctx.fillRect(-2, 8, 12, 4);
+          }
+          ctx.restore();
+          if (car.horn > 0) {
+            ctx.fillStyle = '#fff3d6';
+            ctx.font = '700 13px system-ui';
+            ctx.textAlign = 'center';
+            ctx.fillText('!', car.x, car.y - 20);
+            ctx.textAlign = 'left';
+          }
+        });
+        /* Chevron over the car Mara is driving (07: player readable). */
+        var pc = state.vehicles.playerCar;
+        if (pc) {
+          var bob = Math.sin(state.elapsed * 5) * 2;
+          ctx.fillStyle = cfg.palette.coral;
+          ctx.beginPath();
+          ctx.moveTo(pc.x, pc.y - 26 + bob);
+          ctx.lineTo(pc.x - 6, pc.y - 17 + bob);
+          ctx.lineTo(pc.x + 6, pc.y - 17 + bob);
+          ctx.closePath();
+          ctx.fill();
+        }
+        state.vehicles.drivers.forEach(function (d) {
+          ctx.fillStyle = '#3a4a44';
+          ctx.beginPath(); ctx.arc(d.x, d.y, 6, 0, TAU); ctx.fill();
+          ctx.fillStyle = '#fff3d6';
+          ctx.font = '700 13px system-ui';
+          ctx.textAlign = 'center';
+          ctx.fillText('!', d.x, d.y - 12);
+          ctx.textAlign = 'left';
+        });
+        /* Particles: smoke rises, flame flickers, impact sparks, skid marks. */
+        state.vehicles.effects().forEach(function (e) {
+          if (e.kind === 'smoke') {
+            ctx.fillStyle = 'rgba(120,120,120,' + Math.max(0, e.life * 0.4) + ')';
+            ctx.beginPath(); ctx.arc(e.x, e.y, 9 + (1.5 - e.life) * 7, 0, TAU); ctx.fill();
+          } else if (e.kind === 'flame') {
+            ctx.fillStyle = e.life > 0.3 ? '#ff9a3d' : '#ff5a2d';
+            ctx.beginPath(); ctx.arc(e.x, e.y, 7, 0, TAU); ctx.fill();
+          } else if (e.kind === 'impact') {
+            ctx.strokeStyle = 'rgba(255,220,120,' + Math.max(0, e.life) + ')';
+            ctx.lineWidth = 2;
+            for (var s = 0; s < 6; s++) {
+              var a = s * Math.PI / 3;
+              ctx.beginPath();
+              ctx.moveTo(e.x + Math.cos(a) * 4, e.y + Math.sin(a) * 4);
+              ctx.lineTo(e.x + Math.cos(a) * 13, e.y + Math.sin(a) * 13);
+              ctx.stroke();
+            }
+          } else if (e.kind === 'skid') {
+            ctx.fillStyle = 'rgba(20,24,24,' + Math.max(0, e.life * 0.35) + ')';
+            ctx.fillRect(e.x - 9, e.y - 9, 18, 18);
+          }
+        });
+      }
       /* Night shade and the sunset wash, both driven by the day fraction. */
       var shade = state.day < 0.46 ? 0 : state.day < 0.55 ? (state.day - 0.46) * 1.45 : state.day < 0.86 ? 0.13 : Math.max(0, 0.13 - (state.day - 0.86) * 0.9);
       if (shade > 0) {
@@ -185,8 +259,23 @@ var CoralRender = (function () {
       ctx.fillRect(0, view.height - 38, view.width, 38);
       text('WASD / ARROWS  MOVE', 24, view.height - 14, 12, '#fff2d3', 600);
       text('SHIFT  RUN', 230, view.height - 14, 12, '#fff2d3', 600);
-      text('P  PAUSE', 350, view.height - 14, 12, '#fff2d3', 600);
-      text('M  MUTE', 445, view.height - 14, 12, '#fff2d3', 600);
+      text('E  ENTER CAR', 350, view.height - 14, 12, '#fff2d3', 600);
+      text('P  PAUSE', 480, view.height - 14, 12, '#fff2d3', 600);
+      text('M  MUTE', 575, view.height - 14, 12, '#fff2d3', 600);
+      /* Driving HUD: speed + car, and the contextual interaction prompt. */
+      if (state.vehicles) {
+        var pc = state.vehicles.playerCar;
+        if (pc) {
+          var kmh = Math.round(Math.abs(pc.speed) * 3.6);
+          roundRect(view.width - 172, view.height - 92, 150, 44, 4, 'rgba(17,37,40,.88)');
+          text(kmh + ' km/h', view.width - 152, view.height - 64, 20, cfg.palette.paper, 800);
+          text(pc.type.name.toUpperCase(), view.width - 152, view.height - 50, 11, '#a6c7bb', 600);
+          text('E — EXIT    SPACE — HANDBRAKE', view.width / 2 - 118, view.height - 52, 12, '#fff2d3', 700);
+        } else if (screen === 'play') {
+          var near = state.vehicles.nearest(state.player.x, state.player.y, 42);
+          if (near) text('E — ENTER ' + near.type.name.toUpperCase(), view.width / 2 - 72, view.height - 52, 13, '#fff2d3', 700);
+        }
+      }
       if (screen === 'title') {
         ctx.fillStyle = 'rgba(8,23,28,.48)';
         ctx.fillRect(0, 0, view.width, view.height);

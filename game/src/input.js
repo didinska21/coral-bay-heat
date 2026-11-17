@@ -25,6 +25,8 @@ var GameInput = (function () {
         };
       },
       take: function (key) { var result = !!pressed[key]; pressed[key] = false; return result; },
+      /* Held state for keys that steer continuously (Space = handbrake). */
+      held: function (key) { return !!held[key]; },
       mouse: mouse
     };
   }

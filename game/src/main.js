@@ -9,11 +9,13 @@
   var world = CoralWorld.create();
   var input = GameInput.create(canvas);
   var renderer = CoralRender.create(canvas);
+  var vehicles = CoralVehicles.create(world);
+  var traffic = CoralTraffic.create(world, vehicles);
   var start = world.safeSpawn();
   var state = {
     player: { x: start.x, y: start.y },
     dt: 0, day: 0.38, clock: '', district: world.districtAt(start.x, start.y),
-    elapsed: 0, muted: false
+    elapsed: 0, muted: false, vehicles: vehicles, traffic: traffic
   };
   var screen = 'title';
   var last = performance.now();
@@ -29,14 +31,25 @@
 
   function update(dt) {
     var axis = input.axis();
-    var length = Math.hypot(axis.x, axis.y) || 1;
-    /* Speed is metres per second; dt is seconds. No extra multiplier. */
-    var speed = axis.run ? GAME_CONFIG.player.run : GAME_CONFIG.player.walk;
-    var nextX = Math.max(30, Math.min(GAME_CONFIG.city.width - 240, state.player.x + axis.x / length * speed * dt));
-    var nextY = Math.max(30, Math.min(GAME_CONFIG.city.height - 30, state.player.y + axis.y / length * speed * dt));
-    /* Axis-separated collision: slide along a building instead of sticking. */
-    if (!world.buildingAt(nextX, state.player.y)) state.player.x = nextX;
-    if (!world.buildingAt(state.player.x, nextY)) state.player.y = nextY;
+    /* E toggles in/out of a car; driving replaces walking for this frame. */
+    if (input.take('KeyE')) {
+      var car = vehicles.enter(state.player);
+      if (car) status.textContent = 'Driving the ' + car.type.name + '.';
+      else if (!vehicles.playerCar) status.textContent = 'On foot in ' + state.district.name + '.';
+    }
+    if (vehicles.playerCar) {
+      vehicles.update(dt, state.player, axis, input.held('Space'));
+    } else {
+      var length = Math.hypot(axis.x, axis.y) || 1;
+      /* Speed is metres per second; dt is seconds. No extra multiplier. */
+      var speed = axis.run ? GAME_CONFIG.player.run : GAME_CONFIG.player.walk;
+      var nextX = Math.max(30, Math.min(GAME_CONFIG.city.width - 240, state.player.x + axis.x / length * speed * dt));
+      var nextY = Math.max(30, Math.min(GAME_CONFIG.city.height - 30, state.player.y + axis.y / length * speed * dt));
+      /* Axis-separated collision: slide along a building instead of sticking. */
+      if (!world.buildingAt(nextX, state.player.y)) state.player.x = nextX;
+      if (!world.buildingAt(state.player.x, nextY)) state.player.y = nextY;
+    }
+    traffic.update(dt, state);
     state.district = world.districtAt(state.player.x, state.player.y);
     if (state.district.name !== lastDistrict) {
       lastDistrict = state.district.name;
@@ -73,7 +86,8 @@
 
   window.CoralGame = {
     get screen() { return screen; },
-    state: state, world: world, input: input, renderer: renderer
+    state: state, world: world, input: input, renderer: renderer,
+    vehicles: vehicles, traffic: traffic
   };
   status.textContent = 'Coral Bay Heat. Press Enter to enter the city.';
   requestAnimationFrame(frame);
