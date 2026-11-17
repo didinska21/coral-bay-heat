@@ -233,7 +233,16 @@ var CoralMissions = (function () {
         say('GUARD', 'Sal sends her regards, Voss.');
       }
       if (m.def.id === 'm3' && m.stageIndex === 1) {
-        var valet = onRoad({ x: crown.x + 40, y: crown.y });
+        /* The Sable waits one block from the valet, on a spot clear of other
+           cars — it must never spawn on top of the player's own car, or the
+           steal would grab the wrong car (nearest wins in vehicles.enter). */
+        var valet = null;
+        var spots = [[0, 180], [0, 210], [0, 150], [30, 180], [-30, 180], [0, 240], [0, 120]];
+        for (var ti = 0; ti < spots.length && !valet; ti++) {
+          var cand = onRoad({ x: crown.x + spots[ti][0], y: crown.y + spots[ti][1] });
+          if (vehicles.clearAt(cand.x, cand.y, 18)) valet = cand;
+        }
+        if (!valet) valet = onRoad({ x: crown.x, y: crown.y + 180 });
         var sable = vehicles.spawnCar('sport', valet.x, valet.y, 0, false);
         sable.driver = false;
         sable.missionCar = true;
