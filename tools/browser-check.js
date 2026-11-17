@@ -134,7 +134,12 @@ server.listen(0, '127.0.0.1', async () => {
     await delay(150);
     await tap('KeyE');
     await delay(300);
-    check('carjackingWorks', await evaluate("!!CoralGame.vehicles.playerCar && CoralGame.vehicles.events.some(e => e.type === 'carjacking') && CoralGame.vehicles.drivers.length > 0"));
+    // The carjacking event itself no longer sits in vehicles.events: the
+    // police module drains the shared crime queue every frame (S3), so the
+    // event is asserted there instead — witnessedCarjacking proves a
+    // carjacking reaches the police and raises a star. Here the mechanic
+    // is the assertion: a driven car becomes the player's, its driver bails.
+    check('carjackingWorks', await evaluate("!!CoralGame.vehicles.playerCar && CoralGame.vehicles.drivers.length > 0"));
     // Traffic must be alive, moving, and never inside a building.
     const aiBefore = await evaluate("CoralGame.vehicles.cars.filter(c => c.ai).length");
     const aiPos = await evaluate("CoralGame.vehicles.cars.filter(c => c.ai).slice(0, 5).map(c => [Math.round(c.x), Math.round(c.y)])");
