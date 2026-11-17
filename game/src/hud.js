@@ -182,6 +182,10 @@ var CoralHud = (function () {
           } else {
             var cx = Math.max(40, Math.min(view.width - 40, sx));
             var cy = Math.max(130, Math.min(view.height - 90, sy));
+            /* Keep the arrow clear of the left-hand panels (district,
+               objective, activity): push it below them when it lands
+               on that side of the screen. */
+            if (cx < 300 && cy < 215) cy = 215;
             var angle = Math.atan2(sy - view.height / 2, sx - view.width / 2);
             ctx.fillStyle = '#ffd34d';
             ctx.beginPath();
