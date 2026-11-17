@@ -109,7 +109,7 @@ var CoralPedestrians = (function () {
          for. Walkers stay where they are put until the game is unfrozen. */
       spawnCrowd: function (x, y, n) {
         for (var i = 0; i < n; i++) {
-          var angle = rng() * Math.PI * 2, radius = 20 + rng() * 100;
+          var angle = rng() * Math.PI * 2, radius = 15 + rng() * 45;
           var near = world.nearestRoad(x + Math.cos(angle) * radius, y + Math.sin(angle) * radius);
           var w;
           if (near.axis === 'v') {
