@@ -13,6 +13,9 @@
 <body>
 <canvas id="game" aria-label="CORAL BAY HEAT, an open-world crime game"></canvas>
 <p id="status" role="status" aria-live="polite"></p>
+<!-- Classic scripts in dependency order: config first, then the systems,
+     then shots.js (the ?shot=<name>&seed=7 staging hook the capture pilot
+     uses for the entry screenshots), then render and the main loop last. -->
 <script src="./src/config.js"></script>
 <script src="./src/random.js"></script>
 <script src="./src/input.js"></script>

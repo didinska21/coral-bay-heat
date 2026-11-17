@@ -8,7 +8,10 @@
    and wanted stars in a shot are whatever the game itself produced.
    Usage: game/index.html?shot=<name>&seed=7, then from the console or
    the pilot: CoralShots.stage(name) for scene setup, CoralShots.freeze()
-   before the capture, CoralShots.describe() for the verification log. */
+   before the capture, CoralShots.describe() for the verification log.
+   freeze() takes keep flags: keepDialog preserves a staged dialog line,
+   keepBanner preserves the MISSION PASSED banner — shot 4 needs both,
+   the other shots have neither and pass nothing. */
 var CoralShots = (function () {
   /* Day fractions for the four shots (sun model in render.js: 0.25
      sunrise, 0.5 noon, 0.75 sunset, 0/1 midnight). */
@@ -23,7 +26,7 @@ var CoralShots = (function () {
     var q = new URLSearchParams(location.search);
     return { shot: q.get('shot'), seed: parseInt(q.get('seed') || '7', 10) || 7 };
   }
-  function clearTransients(keepDialog) {
+  function clearTransients(keepDialog, keepBanner) {
     var g = game();
     if (!g) return;
     /* Notifications and horns are floaters; skid marks stay (they are
@@ -36,7 +39,9 @@ var CoralShots = (function () {
     g.combat.effects.length = 0;
     g.vehicles.cars.forEach(function (c) { c.horn = 0; });
     if (!keepDialog) g.missions.dialog = null;
-    g.missions.banner = null;
+    /* The banner is the centrepiece of shot 4 (MISSION PASSED after the
+       final delivery) — only clear it when the shot does not need it. */
+    if (!keepBanner) g.missions.banner = null;
   }
   function stage(name) {
     var g = game();
@@ -49,10 +54,10 @@ var CoralShots = (function () {
     g.state.day = scene.day;
     return { name: name, day: scene.day, seed: seed };
   }
-  function freeze(on, keepDialog) {
+  function freeze(on, keepDialog, keepBanner) {
     var g = game();
     if (!g) return false;
-    if (on) clearTransients(keepDialog);
+    if (on) clearTransients(keepDialog, keepBanner);
     g.state.frozen = !!on;
     return g.state.frozen;
   }
@@ -74,6 +79,7 @@ var CoralShots = (function () {
       mission: m ? m.def.id + ' stage ' + m.stageIndex + '/' + m.stages.length : null,
       objective: m && m.stages[m.stageIndex] ? m.stages[m.stageIndex].text : null,
       dialog: g.missions.dialog ? g.missions.dialog.who + ': ' + g.missions.dialog.text : null,
+      banner: g.missions.banner ? g.missions.banner.title + ' — ' + g.missions.banner.sub : null,
       policeUnits: g.police.units.length,
       roadblock: !!g.police.roadblock,
       pedestrians: g.pedestrians.walkers.length,
