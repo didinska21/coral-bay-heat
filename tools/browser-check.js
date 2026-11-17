@@ -284,6 +284,8 @@ server.listen(0, '127.0.0.1', async () => {
     check('continueRestores', await evaluate("CoralGame.screen==='play' && CoralGame.state.money===250 && CoralGame.missions.completed.includes('m1')"));
     // The reload wiped window.warpToObjective with the old page: define it again.
     await evaluate(`window.warpToObjective = () => { const g=CoralGame, t=g.missions.stageTarget(); if(!t) return false; const c=g.vehicles.playerCar; if(c){c.x=t.x;c.y=t.y;c.speed=0;c.vx=0;c.vy=0;} g.state.player.x=t.x; g.state.player.y=t.y; return true; }; true`);
+    // Same for the S3 deterministic police stepper, used by the M4 lay-low check.
+    await evaluate(`window.stepPolice=(seconds)=>{const g=CoralGame;for(let t=0;t<seconds;t+=.05){g.state.elapsed+=.05;g.state.district=g.world.districtAt(g.state.player.x,g.state.player.y);g.police.update(.05,g.state);}};true`);
     // M2 chain: pistol unlock + guards, driven through with the same warps.
     await evaluate("CoralGame.missions.start('m2')");
     await delay(300);
