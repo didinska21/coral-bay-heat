@@ -3,6 +3,11 @@
    with a smooth lerp; day/night shading comes from the state's day fraction. */
 var CoralRender = (function () {
   var cfg = GAME_CONFIG, TAU = Math.PI * 2;
+  /* Deterministic 0..1 hash of two coordinates. All texture, window and
+     glow variation derives from it — never Math.random at draw time —
+     so every frame, and every frozen screenshot, is identical. */
+  function hash2(x, y) { var h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return h - Math.floor(h); }
+  var NEON = ['#ff5da2', '#39d0d8', '#ffb03a', '#8affc1', '#c792ff'];
   function create(canvas) {
     var ctx = canvas.getContext('2d');
     var view = { x: 0, y: 0, scale: 1, width: 0, height: 0 };
@@ -47,6 +52,13 @@ var CoralRender = (function () {
       var sunEl = Math.sin((state.day - 0.25) * TAU);
       var nightF = sunEl < 0 ? Math.min(1, -sunEl * 2.2) : 0;
       var duskF = Math.max(0, 1 - Math.abs(state.day - 0.79) / 0.09);
+      /* Soft-shadow shape for the frame: shadows stretch and fade in as
+         the sun drops, shrink to almost nothing at noon, and vanish at
+         night (sunEl <= 0). The offset points away from the sun. */
+      var shadowLen = sunEl > 0 ? 3 + (1 - sunEl) * 13 : 0;
+      var shadowA = sunEl > 0 ? 0.10 + (1 - sunEl) * 0.12 : 0;
+      var shadowOX = -Math.cos((state.day - 0.25) * TAU) * shadowLen;
+      var shadowOY = -Math.sin((state.day - 0.25) * TAU) * shadowLen * 0.5 + 2;
       ctx.save();
       ctx.scale(view.scale * zoom, view.scale * zoom);
       ctx.translate(-view.x, -view.y);
@@ -65,6 +77,18 @@ var CoralRender = (function () {
         ctx.beginPath();
         ctx.moveTo(3040, wy);
         ctx.bezierCurveTo(3080, wy - 12, 3120, wy + 12, 3180, wy);
+        ctx.stroke();
+      }
+      /* Shimmer: short light streaks scattered on the water by hash —
+         same positions every frame, just enough to break the flat fill. */
+      ctx.lineWidth = 2;
+      for (var sh = 0; sh < 30; sh++) {
+        var shy = (sh * 173 + 60) % cfg.city.height;
+        var shx = cfg.city.width - cfg.city.beach + 10 + hash2(sh, 7) * 130;
+        ctx.strokeStyle = 'rgba(224,250,246,' + (0.08 + hash2(sh, 21) * 0.12) + ')';
+        ctx.beginPath();
+        ctx.moveTo(shx, shy);
+        ctx.lineTo(shx + 20 + hash2(sh, 13) * 44, shy);
         ctx.stroke();
       }
       /* City walls on the north, west and south edges — a visible reason the
@@ -95,6 +119,25 @@ var CoralRender = (function () {
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cfg.city.width - cfg.city.beach, y); ctx.stroke();
       });
       ctx.setLineDash([]);
+      /* Per-segment tonal variation on the asphalt (coordinate hash, so
+         identical every frame): the long flat road strips stop reading
+         as one flat colour. Kept very low contrast on purpose. */
+      world.roadsX.forEach(function (x) {
+        for (var seg = 0; seg < cfg.city.height; seg += 150) {
+          var rh = hash2(x, seg);
+          if (rh < 0.45) continue;
+          ctx.fillStyle = rh < 0.72 ? 'rgba(255,246,220,.045)' : 'rgba(10,14,14,.05)';
+          ctx.fillRect(x - cfg.city.road / 2, seg, cfg.city.road, 150);
+        }
+      });
+      world.roadsY.forEach(function (y) {
+        for (var seg = 0; seg < cfg.city.width - cfg.city.beach; seg += 150) {
+          var rh = hash2(seg, y);
+          if (rh < 0.45) continue;
+          ctx.fillStyle = rh < 0.72 ? 'rgba(255,246,220,.045)' : 'rgba(10,14,14,.05)';
+          ctx.fillRect(seg, y - cfg.city.road / 2, 150, cfg.city.road);
+        }
+      });
       /* Marina piers. */
       world.piers.forEach(function (p) {
         ctx.fillStyle = '#987651';
@@ -104,6 +147,10 @@ var CoralRender = (function () {
       });
       /* Mangrove trees. */
       world.mangroves.forEach(function (tree) {
+        if (shadowA > 0.01) {
+          ctx.fillStyle = 'rgba(18,26,22,' + shadowA + ')';
+          ctx.beginPath(); ctx.ellipse(tree.x + 4 + shadowOX, tree.y + 5 + shadowOY, 14 * tree.size, 6 * tree.size, 0, 0, TAU); ctx.fill();
+        }
         ctx.fillStyle = '#354d42';
         ctx.beginPath(); ctx.arc(tree.x + 4, tree.y + 5, 13 * tree.size, 0, TAU); ctx.fill();
         ctx.fillStyle = '#66835b';
@@ -114,15 +161,35 @@ var CoralRender = (function () {
       world.buildings.forEach(function (b) {
         var shadowX = 12 + Math.cos(state.day * TAU) * 24;
         var shadowY = 10 + Math.sin(state.day * TAU) * 19;
-        ctx.fillStyle = 'rgba(34,43,43,.20)';
+        /* The block shadow fades with the sun — full at noon, a whisper
+           at night (the leaning offset above already follows the day). */
+        ctx.fillStyle = 'rgba(34,43,43,' + (0.05 + 0.15 * Math.max(0, sunEl)) + ')';
         ctx.fillRect(b.x + shadowX, b.y + shadowY, b.w, b.h);
         ctx.fillStyle = b.color;
         ctx.fillRect(b.x, b.y, b.w, b.h);
         ctx.fillStyle = b.roof;
         ctx.fillRect(b.x + 4, b.y + 4, b.w - 8, b.h - 8);
-        ctx.fillStyle = 'rgba(255,238,192,.6)';
+        /* Rooftop tonal variation by coordinate hash, so no two roofs
+           read as exactly the same flat colour. */
+        var roofH = hash2(b.x * 1.7, b.y * 1.7);
+        ctx.fillStyle = roofH < 0.5
+          ? 'rgba(255,244,214,' + (roofH * 0.07) + ')'
+          : 'rgba(24,18,10,' + ((roofH - 0.5) * 0.09) + ')';
+        ctx.fillRect(b.x + 4, b.y + 4, b.w - 8, b.h - 8);
+        /* Windows: faint by day; at night a hash-chosen subset lights
+           up warm (a few cool) and the rest stay dark, so the night
+           city looks lived in instead of uniformly dimmed. */
         for (var wx = b.x + 11; wx < b.x + b.w - 5; wx += 20) {
-          for (var wy = b.y + 11; wy < b.y + b.h - 5; wy += 23) ctx.fillRect(wx, wy, 5, 7);
+          for (var wy = b.y + 11; wy < b.y + b.h - 5; wy += 23) {
+            if (nightF > 0.25) {
+              var litH = hash2(b.x + wx * 3, b.y + wy * 3);
+              if (litH > 0.45) continue;
+              ctx.fillStyle = litH < 0.08 ? 'rgba(170,220,255,.92)' : 'rgba(255,198,96,.95)';
+            } else {
+              ctx.fillStyle = 'rgba(255,238,192,.6)';
+            }
+            ctx.fillRect(wx, wy, 5, 7);
+          }
         }
         if (b.shop) {
           ctx.fillStyle = '#f7dfaa';
@@ -136,6 +203,10 @@ var CoralRender = (function () {
       });
       /* Palms and lamps along the streets. */
       world.palms.forEach(function (p) {
+        if (shadowA > 0.01) {
+          ctx.fillStyle = 'rgba(18,26,22,' + shadowA + ')';
+          ctx.beginPath(); ctx.ellipse(p.x + shadowOX, p.y + 8 + shadowOY, 12, 5, 0, 0, TAU); ctx.fill();
+        }
         ctx.fillStyle = '#79593e';
         ctx.fillRect(p.x - 2, p.y - 3, 5, 14);
         ctx.fillStyle = '#346b58';
@@ -162,6 +233,14 @@ var CoralRender = (function () {
           ctx.save();
           ctx.translate(car.x, car.y);
           ctx.rotate(car.angle);
+          /* Soft sun shadow under the car (the hard rect below stays as
+             the contact shadow): stretches at dawn/dusk, gone at night. */
+          if (shadowA > 0.01) {
+            ctx.fillStyle = 'rgba(15,22,22,' + shadowA + ')';
+            ctx.beginPath();
+            ctx.ellipse(shadowOX * 0.4, 2 + shadowOY * 0.4, 20 + shadowLen * 0.5, 10, 0, 0, TAU);
+            ctx.fill();
+          }
           ctx.fillStyle = 'rgba(10,20,22,.28)';
           ctx.fillRect(-15, -4, 34, 15);
           ctx.fillStyle = '#1c2626';
@@ -313,28 +392,66 @@ var CoralRender = (function () {
           : 'rgba(252,116,76,' + (0.22 * horizon) + ')';
         ctx.fillRect(view.x, view.y, vw, vh);
       }
+      /* Dusk grading: in the golden-hour window the whole scene warms
+         and the shore water catches the light, so the cover shot reads
+         as sunset rather than flat afternoon. */
+      if (duskF > 0) {
+        ctx.fillStyle = 'rgba(255,150,60,' + (0.13 * duskF) + ')';
+        ctx.fillRect(view.x, view.y, vw, vh);
+        ctx.fillStyle = 'rgba(255,180,100,' + (0.05 * duskF) + ')';
+        ctx.fillRect(cfg.city.width - cfg.city.beach, view.y, 40, vh);
+      }
       /* Night light pass, drawn AFTER the shade so the lights punch
-         through it instead of being darkened with everything else.
-         Headlight glow first: a soft warm ellipse ahead of the player's
-         car and every police car, so vehicles read against dark roads
-         (at night the navy shade alone crushes a dark car body into
-         the asphalt). Cheap: two flat ellipses per lit car, night only. */
-      if (nightF > 0.25 && state.vehicles) {
-        var glowCars = state.vehicles.cars.filter(function (c) {
-          return c.police || c === state.vehicles.playerCar;
+         through it instead of being darkened with everything else:
+         lamp pools, neon shopfronts, shore reflections, and headlight
+         glow — a soft warm ellipse ahead of the player's car and every
+         police car, so vehicles read against dark roads (at night the
+         navy shade alone crushes a dark car body into the asphalt).
+         Everything is viewport-culled or per-lit-car, so it stays
+         cheap: a handful of flat ellipses and rects per frame. */
+      if (nightF > 0.25) {
+        world.lamps.forEach(function (l) {
+          if (l.x < view.x - 40 || l.x > view.x + vw + 40 || l.y < view.y - 40 || l.y > view.y + vh + 40) return;
+          ctx.fillStyle = 'rgba(255,214,140,' + (0.055 * nightF) + ')';
+          ctx.beginPath(); ctx.ellipse(l.x, l.y, 30, 19, 0, 0, TAU); ctx.fill();
+          ctx.fillStyle = 'rgba(255,228,170,' + (0.05 * nightF) + ')';
+          ctx.beginPath(); ctx.ellipse(l.x, l.y, 13, 8, 0, 0, TAU); ctx.fill();
         });
-        var glowPc = state.vehicles.playerCar;
-        if (glowPc && glowCars.indexOf(glowPc) < 0) glowCars.push(glowPc);
-        glowCars.forEach(function (car) {
-          ctx.save();
-          ctx.translate(car.x, car.y);
-          ctx.rotate(car.angle);
-          ctx.fillStyle = 'rgba(255,216,150,' + (0.10 * nightF) + ')';
-          ctx.beginPath(); ctx.ellipse(32, 0, 32, 14, 0, 0, TAU); ctx.fill();
-          ctx.fillStyle = 'rgba(255,232,180,' + (0.10 * nightF) + ')';
-          ctx.beginPath(); ctx.ellipse(24, 0, 18, 8, 0, 0, TAU); ctx.fill();
-          ctx.restore();
+        world.buildings.forEach(function (b) {
+          if (!b.shop) return;
+          if (b.x + b.w < view.x || b.x > view.x + vw || b.y + b.h < view.y || b.y > view.y + vh) return;
+          var dn = world.districtAt(b.x + b.w / 2, b.y + b.h / 2).name;
+          if (dn !== 'Downtown' && dn !== 'Boardwalk') return;
+          var neon = NEON[Math.floor(hash2(b.x, b.y) * NEON.length)];
+          ctx.globalAlpha = 0.10 * nightF;
+          ctx.fillStyle = neon;
+          ctx.fillRect(b.x + b.w * 0.2 - 5, b.y + b.h - 20, b.w * 0.6 + 10, 19);
+          ctx.globalAlpha = 0.20 * nightF;
+          ctx.fillRect(b.x + b.w * 0.2, b.y + b.h - 15, b.w * 0.6, 9);
+          ctx.globalAlpha = 1;
         });
+        /* Shore-light reflection: two warm strips fading into the water. */
+        ctx.fillStyle = 'rgba(255,190,110,' + (0.05 * nightF) + ')';
+        ctx.fillRect(cfg.city.width - cfg.city.beach, view.y, 46, vh);
+        ctx.fillStyle = 'rgba(255,205,130,' + (0.05 * nightF) + ')';
+        ctx.fillRect(cfg.city.width - cfg.city.beach, view.y, 18, vh);
+        if (state.vehicles) {
+          var glowCars = state.vehicles.cars.filter(function (c) {
+            return c.police || c === state.vehicles.playerCar;
+          });
+          var glowPc = state.vehicles.playerCar;
+          if (glowPc && glowCars.indexOf(glowPc) < 0) glowCars.push(glowPc);
+          glowCars.forEach(function (car) {
+            ctx.save();
+            ctx.translate(car.x, car.y);
+            ctx.rotate(car.angle);
+            ctx.fillStyle = 'rgba(255,216,150,' + (0.10 * nightF) + ')';
+            ctx.beginPath(); ctx.ellipse(32, 0, 32, 14, 0, 0, TAU); ctx.fill();
+            ctx.fillStyle = 'rgba(255,232,180,' + (0.10 * nightF) + ')';
+            ctx.beginPath(); ctx.ellipse(24, 0, 18, 8, 0, 0, TAU); ctx.fill();
+            ctx.restore();
+          });
+        }
       }
       ctx.restore();
       /* Mara: coral dot, pale face, and the chevron marker above her so the
@@ -373,6 +490,12 @@ var CoralRender = (function () {
         state.pedestrians.walkers.forEach(function (w) {
           var wx = (w.x - view.x) * zoom, wy = (w.y - view.y) * zoom;
           if (wx < -12 || wx > view.width + 12 || wy < -12 || wy > view.height + 12) return;
+          if (shadowA > 0.01) {
+            ctx.fillStyle = 'rgba(15,22,22,' + Math.min(0.3, shadowA * 1.4) + ')';
+            ctx.beginPath();
+            ctx.ellipse(wx + shadowOX * 0.35, wy + 4 + shadowOY * 0.2, 7, 3, 0, 0, TAU);
+            ctx.fill();
+          }
           ctx.fillStyle = w.color;
           ctx.beginPath(); ctx.arc(wx, wy, 5, 0, TAU); ctx.fill();
           if (w.flee > 0) {
