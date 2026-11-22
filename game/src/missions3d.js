@@ -349,7 +349,19 @@ var CoralMissions = (function () {
   function dialogue() { return dialogLine ? { who: dialogLine.who, text: dialogLine.text } : null; }
   function markedCar() { return active && active.marked ? active.marked : null; }
 
+  /* F4-S3 save restore: money/respect/completed written back at boot
+     by save3d.js (CoralSave.load). Chain position only — no mission
+     is ever mid-flight across a reload. */
+  function restore(s) {
+    if (!s) return;
+    api.money = s.money | 0;
+    api.respect = s.respect | 0;
+    completed = Math.max(0, Math.min(5, s.completedCount | 0));
+    api.storyComplete = completed >= 5;
+  }
+
   api.init = init; api.update = update; api.draw = draw;
+  api.restore = restore;
   api.start = start; api.state = state; api.index = index;
   api.dialogue = dialogue; api.objective = objective; api.objectiveText = objectiveText;
   api.markedCar = markedCar; api.rankName = rankName;

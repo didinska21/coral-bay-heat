@@ -133,6 +133,7 @@
         parked.push(playerCar);
         playerCar = car;
       }
+      if (drivenCars.indexOf(playerCar) < 0) drivenCars.push(playerCar);
       mode = 'car';
     }
   }
@@ -141,12 +142,18 @@
   var keys = {};
   window.addEventListener('keydown', function (e) {
     keys[e.code] = true;
-    if (e.code === 'KeyF' && !e.repeat) toggleVehicle();
+    // F4-S3: any key dismisses the title (the checks drive with
+    // dispatched keys and must never hang waiting for a click).
+    if (gameState === 'title') gameState = 'play';
+    else if (e.code === 'KeyF' && !e.repeat && gameState === 'play') toggleVehicle();
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].indexOf(e.code) >= 0) e.preventDefault();
   });
   window.addEventListener('keyup', function (e) { keys[e.code] = false; });
   window.addEventListener('blur', function () { keys = {}; Coral3D.input = keys; });
-  window.addEventListener('mousedown', function () { CoralCombat.mouseDown = true; });
+  window.addEventListener('mousedown', function () {
+    if (gameState === 'title') { gameState = 'play'; return; }
+    CoralCombat.mouseDown = true;
+  });
   window.addEventListener('mouseup', function () { CoralCombat.mouseDown = false; });
 
   function driveInput() {
@@ -170,7 +177,11 @@
   }
 
   /* ---------- F4-S2 systems: police, combat, missions ---------- */
-  var gameState = 'play'; // 'play' | 'busted' | 'wasted' (S3 adds screens)
+  // F4-S3 states: 'title' (attract orbit, input blocked) | 'play' |
+  // 'pause' (sim frozen) | 'busted' | 'wasted'. The smoke shot keeps
+  // the old behaviour: it boots straight into its composed frame.
+  var gameState = /[?&]shot=/.test(location.search) ? 'play' : 'title';
+  var drivenCars = [playerCar]; // distinct cars Mara has driven (stats panel)
   var env = {
     gl: gl, city: city, rng: rng, keys: keys,
     player: function () {
@@ -200,10 +211,20 @@
   var Coral3D = {
     input: keys,
     setWanted: function (n) { CoralPolice.setWanted(n); },
-    startMission: function (i) { return CoralMissions.start(i); },
+    // F4-S3: starting the game from title/pause. Any staging call
+    // that implies play (startMission / teleport) also dismisses
+    // the title, so the headless checks never wait for a click.
+    startGame: function () {
+      if (gameState === 'title' || gameState === 'pause') gameState = 'play';
+    },
+    startMission: function (i) {
+      if (gameState === 'title') gameState = 'play';
+      return CoralMissions.start(i);
+    },
     objective: function () { return CoralMissions.objective(); },
     reset: function () { resetPlay(); },
     teleport: function (x, z) {
+      if (gameState === 'title') gameState = 'play';
       var f = focusPos(); f.x = x; f.z = z;
       if (mode === 'car') playerCar.speed = 0;
       camInit = false;
@@ -219,6 +240,7 @@
         traffic: traffic.length, peds: crowd.length, draws: draws,
         district: City3D.districtAt(f.x),
         state: gameState,
+        vehicle: playerCar.variant, carsDriven: drivenCars.length,
         wanted: CoralPolice.stars, police: CoralPolice.units.length,
         heli: CoralPolice.heliActive, searching: CoralPolice.searching,
         mission: CoralMissions.index(), missionState: CoralMissions.state(),
@@ -230,8 +252,14 @@
   Object.defineProperty(Coral3D, 'state', {
     get: function () { return gameState; },
     set: function (v) {
-      if (v === 'play' && gameState !== 'play') resetPlay();
-      else if (v === 'busted' || v === 'wasted') gameState = v;
+      if (v === 'play') {
+        // From busted/wasted 'play' means restart (the wired reset);
+        // from title/pause it is a plain resume — no reset.
+        if (gameState === 'busted' || gameState === 'wasted') resetPlay();
+        else gameState = 'play';
+      }
+      else if (v === 'pause') { if (gameState === 'play') gameState = 'pause'; }
+      else if (v === 'busted' || v === 'wasted' || v === 'title') gameState = v;
     }
   });
   Object.defineProperty(Coral3D, 'player', {
@@ -307,6 +335,20 @@
       CoralMissions.update(dt);
       heli.angle += dt * 0.14;
       heli.rotor += dt * 28;
+    } else if (!SHOT && gameState === 'title') {
+      // Attract mode: the city lives on (traffic, crowd, day cycle,
+      // heli) while the camera orbits the marina boulevard; player
+      // input stays blocked until start.
+      t += dt;
+      updateDay(dt);
+      var tFocus = focusPos();
+      Traffic3D.update(traffic, dt, city, rng, tFocus);
+      People3D.updateCrowd(crowd, dt, city.roads, rng, tFocus);
+      heli.angle += dt * 0.14;
+      heli.rotor += dt * 28;
+    } else if (!SHOT) {
+      // pause / busted / wasted: frozen sim, scene keeps rendering.
+      updateDay(0);
     } else {
       // Composed still: golden hour, Mara's sport car on the Marina
       // avenue heading north, traffic + a pedestrian in frame, heli up.
@@ -334,8 +376,15 @@
       camPos[1] += (wantCam[1] - camPos[1]) * k;
       camPos[2] += (wantCam[2] - camPos[2]) * k;
     }
+    var lookTarget = [focus2.x + fx * 7, 1.6, focus2.z + fz * 7];
+    if (!SHOT && gameState === 'title') {
+      // Slow orbit around the marina boulevard for the title screen.
+      var oa = t * 0.07;
+      camPos = [240 + Math.cos(oa) * 58, 15, Math.sin(oa) * 58];
+      lookTarget = [240, 2, 0];
+    }
     var proj = Mat4.perspective(1.05, canvas.width / canvas.height, 0.1, 700); // far = fog range: distant chunks clip out entirely
-    var view = Mat4.lookAt(camPos, [focus2.x + fx * 7, 1.6, focus2.z + fz * 7], [0, 1, 0]);
+    var view = Mat4.lookAt(camPos, lookTarget, [0, 1, 0]);
     var viewProj = Mat4.multiply(proj, view);
     ctx.setFog(day.fog, 110, 470, camPos);
     ctx.setEmisMul(1);
