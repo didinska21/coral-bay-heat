@@ -174,13 +174,13 @@ Acc.prototype.build = function (gl) {
 var GLCore = (function () {
   var VERT = [
     'attribute vec3 aPos;', 'attribute vec3 aNor;', 'attribute vec3 aCol;', 'attribute float aEmis;',
-    'uniform mat4 uMVP;', 'uniform mat4 uModel;', 'uniform float uZPush;',
+    'uniform mat4 uMVP;', 'uniform mat4 uModel;', 'uniform float uZPush;', 'uniform float uEmisMul;',
     'varying vec3 vCol;', 'varying vec3 vNor;', 'varying vec3 vWorld;', 'varying float vEmis;',
     'void main() {',
     '  vec4 world = uModel * vec4(aPos, 1.0);',
     '  vWorld = world.xyz;',
     '  vNor = mat3(uModel[0].xyz, uModel[1].xyz, uModel[2].xyz) * aNor;',
-    '  vCol = aCol; vEmis = aEmis;',
+    '  vCol = aCol; vEmis = aEmis * uEmisMul;',
     '  gl_Position = uMVP * vec4(aPos, 1.0);',
     '  if (uZPush > 0.5) gl_Position.z = gl_Position.w * 0.99999;', // sky: far plane, drawn last
     '}'
@@ -234,8 +234,14 @@ var GLCore = (function () {
         lightDir: gl.getUniformLocation(prog, 'uLightDir'), sun: gl.getUniformLocation(prog, 'uSun'),
         ambient: gl.getUniformLocation(prog, 'uAmbient'), fogColor: gl.getUniformLocation(prog, 'uFogColor'),
         fog: gl.getUniformLocation(prog, 'uFog'), useFog: gl.getUniformLocation(prog, 'uUseFog'),
-        camPos: gl.getUniformLocation(prog, 'uCamPos'), zPush: gl.getUniformLocation(prog, 'uZPush')
+        camPos: gl.getUniformLocation(prog, 'uCamPos'), zPush: gl.getUniformLocation(prog, 'uZPush'),
+        emisMul: gl.getUniformLocation(prog, 'uEmisMul')
       },
+      // Per-draw emissive multiplier (F4-S1): the city's "glow" mesh
+      // (lit windows, lamp heads, neon) is drawn with this >1 at night
+      // and <1 by day. drawSky always resets it to 1.
+      emisMul: 1,
+      setEmisMul: function (v) { ctx.emisMul = v; },
       bind: function (mesh) {
         gl.bindBuffer(gl.ARRAY_BUFFER, mesh.buffer);
         gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, stride, 0);
@@ -251,19 +257,25 @@ var GLCore = (function () {
         gl.uniformMatrix4fv(ctx.u.model, false, model);
         gl.uniform1f(ctx.u.useFog, useFog === false ? 0 : 1);
         gl.uniform1f(ctx.u.zPush, 0);
+        gl.uniform1f(ctx.u.emisMul, ctx.emisMul);
         gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
       },
       // Sky pass: call AFTER all opaque draws, depth write off — the
       // z-push pins fragments to the far plane so they only land where
       // nothing else was drawn (kills the fullscreen sky overdraw).
+      // Culling is off for this pass only: the camera sits INSIDE the
+      // sky box, so its visible faces are the back faces.
       drawSky: function (mesh, model, viewProj) {
+        gl.disable(gl.CULL_FACE);
         ctx.bind(mesh);
         var mvp = Mat4.multiply(viewProj, model);
         gl.uniformMatrix4fv(ctx.u.mvp, false, mvp);
         gl.uniformMatrix4fv(ctx.u.model, false, model);
         gl.uniform1f(ctx.u.useFog, 0);
         gl.uniform1f(ctx.u.zPush, 1);
+        gl.uniform1f(ctx.u.emisMul, 1);
         gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
+        gl.enable(gl.CULL_FACE);
       },
       setLight: function (dir, sunCol, ambient) {
         gl.uniform3fv(ctx.u.lightDir, dir);
@@ -278,6 +290,12 @@ var GLCore = (function () {
     };
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
+    // Backface culling (F4-S1): Prim windings are CCW-outward, so this
+    // halves fragment work on every closed solid. Single-sided panels
+    // (windows, signs, headlights) are only ever viewed from the
+    // front in this game. drawSky opts out (camera inside the box).
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
     return ctx;
   }
   return { create: create };
