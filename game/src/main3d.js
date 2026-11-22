@@ -109,6 +109,8 @@
   function nearestEnterable() {
     var best = null, bd = 5.5;
     var all = [playerCar].concat(parked);
+    var marked = CoralMissions.markedCar();
+    if (marked && all.indexOf(marked) < 0) all.push(marked);
     for (var i = 0; i < all.length; i++) {
       var d = Math.hypot(all[i].x - mara.x, all[i].z - mara.z);
       if (d < bd) { bd = d; best = all[i]; }
@@ -144,6 +146,8 @@
   });
   window.addEventListener('keyup', function (e) { keys[e.code] = false; });
   window.addEventListener('blur', function () { keys = {}; Coral3D.input = keys; });
+  window.addEventListener('mousedown', function () { CoralCombat.mouseDown = true; });
+  window.addEventListener('mouseup', function () { CoralCombat.mouseDown = false; });
 
   function driveInput() {
     var t = 0, s = 0;
@@ -165,10 +169,40 @@
     return { x: fx * f + rx * r, z: fz * f + rz * r, run: !!(keys.ShiftLeft || keys.ShiftRight) };
   }
 
+  /* ---------- F4-S2 systems: police, combat, missions ---------- */
+  var gameState = 'play'; // 'play' | 'busted' | 'wasted' (S3 adds screens)
+  var env = {
+    gl: gl, city: city, rng: rng, keys: keys,
+    player: function () {
+      var f = focusPos();
+      return { x: f.x, z: f.z, heading: f.heading, mode: mode, speed: mode === 'car' ? playerCar.speed : mara.speed };
+    },
+    playerCar: function () { return playerCar; },
+    mara: function () { return mara; },
+    traffic: function () { return traffic; },
+    crowd: function () { return crowd; },
+    parked: function () { return parked; },
+    camYaw: function () { return camYaw; }
+  };
+  CoralPolice.init(env);
+  CoralCombat.init(env);
+  CoralMissions.init(env);
+  CoralPolice.onBusted = function () { gameState = 'busted'; };
+  CoralCombat.onWasted = function () { gameState = 'wasted'; };
+  function resetPlay() {
+    CoralPolice.reset();
+    CoralCombat.reset();
+    gameState = 'play';
+  }
+
   /* ---------- staging API ---------- */
   var fpsSmooth = 60, draws = 0;
   var Coral3D = {
     input: keys,
+    setWanted: function (n) { CoralPolice.setWanted(n); },
+    startMission: function (i) { return CoralMissions.start(i); },
+    objective: function () { return CoralMissions.objective(); },
+    reset: function () { resetPlay(); },
     teleport: function (x, z) {
       var f = focusPos(); f.x = x; f.z = z;
       if (mode === 'car') playerCar.speed = 0;
@@ -183,10 +217,23 @@
         speed: mode === 'car' ? Math.round(playerCar.speed * 10) / 10 : Math.round(mara.speed * 10) / 10,
         timeHours: Math.round(day.hours * 100) / 100,
         traffic: traffic.length, peds: crowd.length, draws: draws,
-        district: City3D.districtAt(f.x)
+        district: City3D.districtAt(f.x),
+        state: gameState,
+        wanted: CoralPolice.stars, police: CoralPolice.units.length,
+        heli: CoralPolice.heliActive, searching: CoralPolice.searching,
+        mission: CoralMissions.index(), missionState: CoralMissions.state(),
+        money: CoralMissions.money, respect: CoralMissions.respect,
+        health: CoralCombat.health
       };
     }
   };
+  Object.defineProperty(Coral3D, 'state', {
+    get: function () { return gameState; },
+    set: function (v) {
+      if (v === 'play' && gameState !== 'play') resetPlay();
+      else if (v === 'busted' || v === 'wasted') gameState = v;
+    }
+  });
   Object.defineProperty(Coral3D, 'player', {
     get: function () {
       var f = focusPos();
@@ -223,15 +270,30 @@
     draws = 0;
     function draw(mesh, model, viewProj, fog) { ctx.draw(mesh, model, viewProj, fog); draws++; }
 
-    if (!SHOT) {
+    if (!SHOT && gameState === 'play') {
       t += dt;
       updateDay(dt);
       var focus = focusPos();
       if (mode === 'car') {
         Vehicles3D.update(playerCar, dt, driveInput(), city.colliders, city.bounds);
-        // Soft pushes vs traffic + parked cars.
-        for (var i = 0; i < traffic.length; i++) Vehicles3D.collidePair(playerCar, traffic[i], 0.35);
+        // Soft pushes vs traffic + parked cars. A real shunt at speed
+        // is a crime the police remember (F4-S2 hooks).
+        for (var i = 0; i < traffic.length; i++) {
+          if (Vehicles3D.collidePair(playerCar, traffic[i], 0.35) && Math.abs(playerCar.speed) > 5) CoralPolice.crime('hitCar');
+        }
         for (var j = 0; j < parked.length; j++) if (parked[j] !== playerCar) Vehicles3D.collidePair(playerCar, parked[j], 0.15);
+        var markedNow = CoralMissions.markedCar();
+        if (markedNow && markedNow !== playerCar) Vehicles3D.collidePair(playerCar, markedNow, 0.15);
+        // Running a pedestrian down: they go down, the stars go up.
+        if (Math.abs(playerCar.speed) > 3) {
+          for (var pk = 0; pk < crowd.length; pk++) {
+            var cp = crowd[pk];
+            if (!cp.down && Math.hypot(cp.x - playerCar.x, cp.z - playerCar.z) < 2.6) {
+              CoralCombat.downPed(cp);
+              CoralPolice.crime('hitPed');
+            }
+          }
+        }
         mara.x = playerCar.x; mara.z = playerCar.z; mara.heading = playerCar.heading;
       } else {
         var mv = walkInput(camYaw);
@@ -240,6 +302,9 @@
       }
       Traffic3D.update(traffic, dt, city, rng, focus);
       People3D.updateCrowd(crowd, dt, city.roads, rng, focus);
+      CoralPolice.update(dt);
+      CoralCombat.update(dt);
+      CoralMissions.update(dt);
       heli.angle += dt * 0.14;
       heli.rotor += dt * 28;
     } else {
@@ -325,8 +390,12 @@
     draws += traffic.length;
     for (var qi = 0; qi < crowd.length; qi++) {
       var qp = crowd[qi];
+      if (qp.down) continue; // downed peds are drawn tipped by combat3d
       if (Math.hypot(qp.x - camPos[0], qp.z - camPos[2]) < 260) { People3D.draw(ctx, viewProj, qp); draws += 5; }
     }
+    CoralPolice.draw(ctx, viewProj);
+    CoralCombat.draw(ctx, viewProj);
+    CoralMissions.draw(ctx, viewProj);
     // Helicopter circling the bay.
     var hx = Math.cos(heli.angle) * heli.r + 120, hz = Math.sin(heli.angle) * heli.r, hh = heli.h;
     var hHead = Math.PI - heli.angle;
