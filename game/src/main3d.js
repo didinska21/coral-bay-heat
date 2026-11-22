@@ -312,7 +312,7 @@
     if (fpsClock >= 0.5) { fps = Math.round(frames / fpsClock * 10) / 10; frames = 0; fpsClock = 0; }
 
     var frozen = Coral3D.state === 'busted' || Coral3D.state === 'wasted' || Coral3D.state === 'pause';
-    if (!SMOKE && !frozen) { // substep so slow frames still simulate in real time
+    if (!SMOKE && !frozen && !window.__shotFrozen) { // substep so slow frames still simulate in real time
       var steps = Math.max(1, Math.ceil(dt / 0.05)), sdt = dt / steps;
       for (var si = 0; si < steps; si++) update(sdt);
     } else rotorAngle = 2.4;

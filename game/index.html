@@ -1,36 +1,108 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CORAL BAY HEAT</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #101b20; }
-  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #0b0e14; overflow: hidden; }
+  canvas#game { display: block; width: 100%; height: 100%; }
+  body { font-family: system-ui, "Segoe UI", Arial, sans-serif; color: #f2f5f7; }
+
+  /* ---------------------------------------------------------- HUD */
+  .hud-root { pointer-events: none; }
+   .hud-panel { position: fixed; z-index: 5; background: rgba(10, 16, 22, 0.78); border: 2px solid #19e3c2;
+    border-radius: 6px; padding: 8px 12px; }
+  .hud-tl { top: 14px; left: 14px; max-width: 340px; }
+  .hud-mission-title { font-weight: 800; font-size: 17px; letter-spacing: 0.06em; color: #ffd23e; }
+  .hud-mission-stage { font-size: 14px; margin-top: 2px; }
+  .hud-timer { font-size: 34px; font-weight: 800; color: #ff5847; line-height: 1; margin-top: 4px; }
+  .hud-response { top: 150px; left: 14px; border-color: #ff5847; font-weight: 700; font-size: 14px;
+    line-height: 1.45; color: #ffb3ab; }
+  .hud-searching { color: #ffd23e; animation: hud-pulse 0.8s infinite alternate; }
+  @keyframes hud-pulse { from { opacity: 0.35; } to { opacity: 1; } }
+  .hud-tr { top: 14px; right: 14px; text-align: right; min-width: 170px; }
+  .hud-money { font-size: 26px; font-weight: 800; color: #7dff9a; }
+  .hud-stars { font-size: 20px; color: #ffd23e; letter-spacing: 0.12em; }
+  .hud-respect-row { font-size: 13px; font-weight: 700; color: #19e3c2; margin-top: 2px; }
+  .hud-bar-outer { height: 5px; background: #26313a; border-radius: 3px; margin-top: 4px; overflow: hidden; }
+  .hud-bar-inner { height: 100%; width: 0%; background: #19e3c2; }
+  .hud-clock { font-size: 15px; font-weight: 700; margin-top: 4px; }
+  .hud-minimap { position: fixed; z-index: 5; left: 14px; bottom: 14px; border: 2px solid #19e3c2;
+    border-radius: 6px; background: #274b63; }
+  .hud-br { position: fixed; z-index: 5; right: 14px; bottom: 14px; text-align: right; }
+  .hud-radio { display: inline-block; background: rgba(10, 16, 22, 0.78); border: 2px solid #ff9ecf;
+    color: #ffd7ec; border-radius: 999px; padding: 4px 12px; font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+  .hud-veh-row { margin-bottom: 8px; }
+  .hud-vehicle { font-size: 16px; font-weight: 800; letter-spacing: 0.08em; margin-right: 10px; }
+  .hud-speed { font-size: 30px; font-weight: 800; color: #ffd23e; }
+  .hud-weapons { display: flex; gap: 6px; justify-content: flex-end; }
+  .hud-slot { background: rgba(10, 16, 22, 0.78); border: 2px solid #5a6a76; border-radius: 6px;
+    padding: 6px 10px; font-weight: 800; font-size: 14px; color: #9fb2bf; }
+  .hud-slot.on { border-color: #ffd23e; color: #ffd23e; }
+  .hud-dialogue { position: fixed; z-index: 5; left: 50%; bottom: 26px; transform: translateX(-50%);
+    width: min(560px, 80vw); background: rgba(10, 16, 22, 0.85); border: 2px solid #ffd23e;
+    border-radius: 8px; padding: 10px 14px; display: flex; gap: 12px; align-items: flex-start; }
+  .hud-dlg-chip { flex: none; width: 34px; height: 34px; border-radius: 50%; background: #ff5847;
+    color: #fff; font-weight: 800; font-size: 18px; display: flex; align-items: center; justify-content: center; }
+  .hud-dlg-who { font-weight: 800; color: #ffd23e; font-size: 14px; }
+  .hud-dlg-text { font-size: 15px; }
+  .hud-toasts { position: fixed; z-index: 5; top: 22%; left: 0; right: 0; text-align: center; }
+  .hud-toast { display: inline-block; background: rgba(10, 16, 22, 0.85); border: 2px solid #7dff9a;
+    color: #7dff9a; border-radius: 8px; padding: 10px 22px; font-size: 24px; font-weight: 800;
+    letter-spacing: 0.05em; }
+  .hud-vignette { position: fixed; inset: 0; pointer-events: none; z-index: 6;
+    background: radial-gradient(ellipse at center, rgba(200, 0, 0, 0) 55%, rgba(200, 0, 0, 0.55) 100%); }
+  .hud-hint { position: fixed; z-index: 5; bottom: 170px; left: 14px; font-size: 13px; font-weight: 600;
+    color: #dfe9ee; background: rgba(10, 16, 22, 0.6); border-radius: 6px; padding: 5px 10px; }
+
+  /* ---------------------------------------------------------- menus */
+  .menu-overlay { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center; }
+  .menu-title { background: transparent; }
+  .menu-wordmark { font-size: 64px; font-weight: 900; letter-spacing: 0.04em; color: #ffd23e;
+    text-shadow: 0 4px 0 #ff5847, 0 2px 12px #14202a; }
+  .menu-subtitle { font-size: 18px; font-weight: 600; margin: 10px 0 4px; text-shadow: 0 1px 6px #14202a; }
+  .menu-controls { font-size: 14px; color: #d7e3e9; margin-bottom: 22px; text-shadow: 0 1px 6px #14202a; }
+  .menu-prompt { margin-top: 16px; font-size: 15px; font-weight: 700; color: #19e3c2; }
+  .menu-btn { pointer-events: auto; background: #ff5847; color: #fff; border: 0; border-radius: 8px;
+    font-size: 18px; font-weight: 800; letter-spacing: 0.05em; padding: 12px 34px; margin: 5px;
+    cursor: pointer; font-family: inherit; }
+  .menu-btn:hover { background: #ffd23e; color: #14202a; }
+  #menu-pause { background: rgba(5, 8, 14, 0.62); }
+  .menu-panel { background: rgba(10, 16, 22, 0.9); border: 2px solid #19e3c2; border-radius: 10px;
+    padding: 26px 38px; min-width: 320px; }
+  .menu-heading { font-size: 26px; font-weight: 900; letter-spacing: 0.05em; }
+  .menu-completion { font-size: 30px; font-weight: 900; color: #ffd23e; margin: 10px 0; }
+  .menu-stats { font-size: 16px; line-height: 1.6; text-align: left; margin-bottom: 18px; }
+  .menu-end { background: rgba(5, 8, 14, 0.5); }
+  .menu-end-word { font-size: 84px; font-weight: 900; letter-spacing: 0.1em; }
+  .menu-end-word.busted { color: #7db4ff; }
+  .menu-end-word.wasted { color: #c9ced4; }
+  .menu-flashbar { width: 100%; height: 26px; }
+  .menu-flashbar.top { background: #ff2020; animation: menu-flash 0.5s infinite alternate; }
+  .menu-flashbar.bottom { background: #2050ff; animation: menu-flash 0.5s infinite alternate-reverse; }
+  @keyframes menu-flash { from { opacity: 0.25; } to { opacity: 1; } }
+  .menu-story { position: fixed; top: 16%; left: 0; right: 0; z-index: 9; text-align: center;
+    font-size: 30px; font-weight: 900; color: #ffd23e; letter-spacing: 0.04em;
+    text-shadow: 0 2px 0 #14202a; pointer-events: none; }
 </style>
 </head>
 <body>
-<canvas id="game" aria-label="CORAL BAY HEAT, an open-world crime game"></canvas>
-<p id="status" role="status" aria-live="polite"></p>
-<!-- Classic scripts in dependency order: config first, then the systems,
-     then shots.js (the ?shot=<name>&seed=7 staging hook the capture pilot
-     uses for the entry screenshots), then render and the main loop last. -->
-<script src="./src/config.js"></script>
-<script src="./src/random.js"></script>
-<script src="./src/input.js"></script>
-<script src="./src/world.js"></script>
-<script src="./src/vehicles.js"></script>
-<script src="./src/traffic.js"></script>
-<script src="./src/pedestrians.js"></script>
-<script src="./src/combat.js"></script>
-<script src="./src/police.js"></script>
-<script src="./src/missions.js"></script>
-<script src="./src/hud.js"></script>
-<script src="./src/save.js"></script>
-<script src="./src/audio.js"></script>
-<script src="./src/shots.js"></script>
-<script src="./src/render.js"></script>
-<script src="./src/main.js"></script>
+<canvas id="game"></canvas>
+<script src="src/random.js"></script>
+<script src="src/gl.js"></script>
+<script src="src/city3d.js"></script>
+<script src="src/vehicles3d.js"></script>
+<script src="src/people3d.js"></script>
+<script src="src/traffic3d.js"></script>
+<script src="src/police3d.js"></script>
+<script src="src/combat3d.js"></script>
+<script src="src/missions3d.js"></script>
+<script src="src/save3d.js"></script>
+<script src="src/hud3d.js"></script>
+<script src="src/menus3d.js"></script>
+<script src="src/shots3d.js"></script>
+<script src="src/main3d.js"></script>
 </body>
 </html>

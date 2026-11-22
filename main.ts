@@ -5,11 +5,13 @@
 // screenshots/ from beside this file to /output and writes
 // /output/dossier.json, the summary the judge reads, with the vendored
 // make.fun library. The game: Mara Voss drives, steals and shoots her way
-// through Coral Bay — four districts, five story missions, three street
-// activities, a wanted system with roadblocks, a live minimap, saves and
-// synthesised audio, all in 2D canvas. Four staged screenshots in
-// screenshots/ (the first by name is the cover) are real renders of the
-// game, captured in Chromium with game/src/shots.js staging.
+// through Coral Bay in full 3D — a hand-rolled WebGL engine (no libraries)
+// renders four districts plus the beach, with traffic, crowds and a
+// day–night cycle; five chained story missions, a 1–5 star wanted system
+// with pursuit units, roadblocks and the AIR ONE police helicopter, a
+// live HUD with minimap, and localStorage saves. Four staged screenshots
+// in screenshots/ (the first by name is the cover) are real renders of
+// the game, captured in Chromium with game/src/shots3d.js staging.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
