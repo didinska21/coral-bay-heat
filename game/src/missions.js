@@ -14,7 +14,7 @@ var CoralMissions = (function () {
       active: null, completed: [], pistolUnlocked: false, sportStored: false,
       storyComplete: false, dialog: null, banner: null, activity: null,
       activityMarker: null, missionMarker: null, chasers: [], news: '',
-      failed: false
+      failed: false, respect: 0
     };
     var dialogQueue = [];
     var spawnedCars = [];
@@ -24,6 +24,23 @@ var CoralMissions = (function () {
       state.notifications.push({ text: text, until: state.elapsed + (seconds || 4) });
     }
     function say(who, text) { dialogQueue.push({ who: who, text: text }); }
+
+    /* Respect ranks (F3): street reputation earned from missions and
+       activities, ranked by the thresholds in config. rankFraction is
+       the 0..1 progress toward the next rank (1 at the top rank) so the
+       HUD bar never needs the table itself. */
+    function rankIndex() {
+      var ranks = cfg.respect.ranks, idx = 0;
+      for (var i = 0; i < ranks.length; i++) if (api.respect >= ranks[i].at) idx = i;
+      return idx;
+    }
+    function rankName() { return cfg.respect.ranks[rankIndex()].name; }
+    function rankFraction() {
+      var ranks = cfg.respect.ranks, idx = rankIndex();
+      if (idx >= ranks.length - 1) return 1;
+      var span = ranks[idx + 1].at - ranks[idx].at;
+      return span > 0 ? (api.respect - ranks[idx].at) / span : 1;
+    }
 
     /* Landmarks, resolved once from the built city: shop buildings by name,
        the piers, and road-snapped points so no objective ever sits inside
@@ -294,6 +311,11 @@ var CoralMissions = (function () {
       def.outro.forEach(function (line) { say(line.who, line.text); });
       api.banner = { title: 'MISSION PASSED', sub: def.title + ' — +$' + reward, until: state.elapsed + 3.5 };
       notify('+$' + reward + '  ·  ' + def.title + ' complete', 5);
+      /* Respect: a finished story mission is worth real street name —
+         call out the new rank when the gain crosses a threshold. */
+      var rankBefore = rankIndex();
+      api.respect += cfg.respect.mission;
+      if (rankIndex() > rankBefore) notify('RESPECT +' + cfg.respect.mission + ' — RANK: ' + rankName(), 5);
       police.setMission(0, false);
       state.lightLock = null;
       api.active = null;
@@ -427,6 +449,10 @@ var CoralMissions = (function () {
       if (a.kind === 'hotcar' && vehicles.playerCar && vehicles.playerCar.health > vehicles.playerCar.maxHealth * 0.8) pay += cfg.hotCarBonus;
       state.money += pay;
       notify('+$' + pay + '  ·  ' + a.kind.toUpperCase() + ' complete', 4);
+      /* Activities earn a smaller respect gain; rank-ups still call out. */
+      var actRankBefore = rankIndex();
+      api.respect += cfg.respect.activity;
+      if (rankIndex() > actRankBefore) notify('RESPECT +' + cfg.respect.activity + ' — RANK: ' + rankName(), 5);
       api.activity = null;
       activityRespawn = state.elapsed + 8;
       if (hooks.save) hooks.save();
@@ -565,6 +591,9 @@ var CoralMissions = (function () {
     }
 
     api.update = update;
+    api.rankIndex = rankIndex;
+    api.rankName = rankName;
+    api.rankFraction = rankFraction;
     api.start = start;
     api.retryCheckpoint = retryCheckpoint;
     api.onFail = onFail;
@@ -585,6 +614,7 @@ var CoralMissions = (function () {
       api.banner = null;
       api.activity = null;
       api.failed = false;
+      api.respect = 0;
       dialogQueue.length = 0;
       clearStageEntities();
       updateMarkers();

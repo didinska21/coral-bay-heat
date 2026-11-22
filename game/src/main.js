@@ -71,6 +71,7 @@
     combat.pistolUnlocked = !!d.pistolUnlocked;
     missions.sportStored = !!d.sportStored;
     missions.storyComplete = !!d.storyComplete;
+    missions.respect = d.respect || 0;
     missions.news = d.news || '';
     state.news = d.news || '';
     state.player.x = d.player.x;

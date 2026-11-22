@@ -34,8 +34,13 @@ var GAME_CONFIG = {
     repair: 100, armour: 150, bustedFineRate: 0.10, bustedFineMax: 500,
     taxiBase: 30, taxiPerMetre: 0.05, taxiTip: 20,
     parcelPay: 150, parcelFastBonus: 50,
-    hotCarPay: 200, hotCarBonus: 100
+    hotCarPay: 200, hotCarBonus: 100,
+    respect: { mission: 20, activity: 5, ranks: [ { at: 0, name: 'NOBODY' }, { at: 20, name: 'RUNNER' }, { at: 40, name: 'WHEELMAN' }, { at: 60, name: 'STREET NAME' }, { at: 85, name: 'FIXER' }, { at: 100, name: 'CORAL BAY LEGEND' } ] }
   },
+  /* Radio ticker (F3): invented stations and tracks, cycled by elapsed
+     time while Mara is driving — trackSeconds per slot, stations flattened
+     in order. All names are original to Coral Bay. */
+  radio: { trackSeconds: 45, stations: [ { name: 'BAYWAVE 98.1', tracks: ['Neon Tide — Glass Palms', 'Salt in the Air — The Breakwaters', 'Midnight Marina — Lucia Vale'] }, { name: 'CORAL FM 104.3', tracks: ['Gilded Gull — Sal & The Tide', 'Two Lanes South — Marlin Club', 'Heat Index — Vera Sol'] }, { name: 'TIDE TALK 88.7', tracks: ['Harbour Lights — The Night Ferry', 'Coppertone Heart — Alba Rey', 'Last Ferry Home — Dockhands'] } ] },
   /* Audio levels (14): master and the two continuous voices. */
   audio: { master: 0.5, engine: 0.05, siren: 0.12, sirenRange: 300 },
   districts: [

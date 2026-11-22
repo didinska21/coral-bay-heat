@@ -115,10 +115,19 @@ var CoralHud = (function () {
       if (screen === 'title') return;
       ctx.setTransform(view.scale, 0, 0, view.scale, 0, 0);
       var missions = state.missions;
-      /* Money, under the wanted panel. */
-      roundRect(view.width - 250, 131, 228, 30, 4, 'rgba(17,37,40,.88)');
+      /* Money, under the wanted panel — a two-row panel since F3: cash
+         on the first row, respect rank and its progress bar below. */
+      roundRect(view.width - 250, 131, 228, 54, 4, 'rgba(17,37,40,.88)');
       text('MONEY', view.width - 235, 151, 11, '#a6c7bb', 700);
       text('$' + state.money.toLocaleString('en-US'), view.width - 175, 152, 14, '#fff5df', 800);
+      if (missions) {
+        text('RESPECT', view.width - 235, 173, 11, '#a6c7bb', 700);
+        text(missions.rankName(), view.width - 37, 174, 12, '#ff735d', 800, 'right');
+        ctx.fillStyle = '#4c5750';
+        ctx.fillRect(view.width - 235, 178, 196, 3);
+        ctx.fillStyle = '#42aeb0';
+        ctx.fillRect(view.width - 235, 178, 196 * missions.rankFraction(), 3);
+      }
       if (state.news) text(state.news, view.width / 2, 14, 11, '#ffd34d', 700, 'center');
       /* Objective panel, under the district panel. */
       var objY = 104;
@@ -157,7 +166,7 @@ var CoralHud = (function () {
         text(actLine, 42, objY + (missions.active ? 92 : 68), 11, '#ffd34d', 700);
       }
       /* Notifications, right side under the money pill. */
-      var ny = 182;
+      var ny = 196;
       state.notifications.forEach(function (n) {
         if (state.elapsed > n.until) return;
         var fade = Math.min(1, (n.until - state.elapsed) / 0.5);
@@ -230,6 +239,25 @@ var CoralHud = (function () {
             text(dist + 'm', lx, ly, 12, '#ffd34d', 800, 'center');
           }
         }
+      }
+      /* Radio ticker (F3): while Mara drives, a bottom-left pill cycles
+         the invented stations by elapsed time — one track per
+         trackSeconds slot, stations flattened in config order. */
+      if (state.vehicles && state.vehicles.playerCar) {
+        var radioCfg = GAME_CONFIG.radio;
+        var flat = [];
+        radioCfg.stations.forEach(function (st) {
+          st.tracks.forEach(function (t) { flat.push({ station: st.name, track: t }); });
+        });
+        var pick = flat[Math.floor(state.elapsed / radioCfg.trackSeconds) % flat.length];
+        var stationLine = '♪ ' + pick.station;
+        var radioW = fitWidth([
+          { value: stationLine, size: 11, weight: 800 },
+          { value: pick.track, size: 11, weight: 600 }
+        ], 200);
+        roundRect(22, view.height - 138, radioW, 42, 4, 'rgba(17,37,40,.88)');
+        text(stationLine, 38, view.height - 120, 11, GAME_CONFIG.palette.paper, 800);
+        text(pick.track, 38, view.height - 103, 11, '#ffd34d', 600);
       }
       drawMinimap(world, state);
     }

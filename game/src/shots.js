@@ -82,6 +82,10 @@ var CoralShots = (function () {
       banner: g.missions.banner ? g.missions.banner.title + ' — ' + g.missions.banner.sub : null,
       policeUnits: g.police.units.length,
       roadblock: !!g.police.roadblock,
+      heli: !!(g.police && g.police.heli),
+      respect: g.missions.respect,
+      rank: g.missions.rankName ? g.missions.rankName() : null,
+      radio: !!g.vehicles.playerCar,
       pedestrians: g.pedestrians.walkers.length,
       player: [Math.round(g.state.player.x), Math.round(g.state.player.y)]
     };

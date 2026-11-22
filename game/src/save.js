@@ -10,7 +10,7 @@ var CoralSave = (function () {
         v: 1, money: state.money, completed: missions.completed.slice(),
         current: missions.active ? missions.active.def.id : null,
         pistolUnlocked: missions.pistolUnlocked, sportStored: missions.sportStored,
-        storyComplete: missions.storyComplete,
+        storyComplete: missions.storyComplete, respect: missions.respect || 0,
         player: { x: Math.round(state.player.x), y: Math.round(state.player.y), health: state.player.health },
         day: state.day, elapsed: state.elapsed, news: missions.news || ''
       };
