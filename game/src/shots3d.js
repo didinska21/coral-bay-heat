@@ -317,13 +317,22 @@
      the camera: fully in frame, cone raking down to Mara. */
   function placeCoverTableau() {
     var u = activeUnits();
-    // Units must sit at low azimuth from the foot camera (half-FOV
-    // ~46 deg): marks on the facade line itself, flanking the guard
-    // line, clear of the sign panel (z -31.6..-27.2).
-    placeUnit(u[0], 547, -44.5, -2.2);   // north doors, angled in
-    placeUnit(u[1], 548, -33, 2.2);      // south doors, angled in
+    // G-A repair: Mara now stages SOUTH of the sign panel (panel
+    // spans z -33.3..-25.1, y 0.2..4.9 on the facade's south
+    // section), so from her camera the panel reads centre-frame —
+    // its top-right corner lands around screen x ~675/1280, well
+    // clear of the DOM crew-chip stack (x >= ~1000). Units sit at
+    // low azimuth from the foot camera (half-FOV ~46 deg).
+    placeUnit(u[0], 545, -41, -2.0);    // north doors, angled in
+    placeUnit(u[1], 545, -25.5, 2.2);   // south foreground, angled in
+    // G-A take 7: place EVERY active unit — at wanted 4 there are
+    // up to four, and in take 6 an unplaced unit drove up during
+    // the scan and parked on Mara's back, filling the foreground
+    // with its lightbar in the frozen frame.
+    placeUnit(u[2], 546, -44.5, -2.4);  // far north doors
+    placeUnit(u[3], 547, -21, 2.4);     // far south foreground
     var gp = Coral3D.crowd.peds;
-    var line = [[546.5, -42.5], [546.5, -30.5], [547.5, -47], [547.5, -27.5], [546, -40.5]];
+    var line = [[546.5, -42], [546.5, -37.5], [547, -33.5], [546, -40], [547.5, -30]];
     [2, 5, 8, 11, 14].forEach(function (pi, gi) {
       if (gp[pi] && line[gi]) {
         gp[pi].x = line[gi][0]; gp[pi].z = line[gi][1];
@@ -333,40 +342,85 @@
     });
     setStride(gp[8], 1.1);   // mid-stride advance poses
     setStride(gp[14], 2.6);
-    // AIR ONE above the roofline at (556,-44): ~15 deg azimuth /
-    // ~16 deg elevation from the camera — clear of the top-left HUD
-    // panel and fully inside the frame (an earlier mark at z=-54
-    // sat at 43 deg azimuth, hidden behind the mission panel).
+    // AIR ONE FULLY in frame (G-A repair: the old y=10.5 mark put
+    // its rotor over the foot cam's +22 deg top edge — only the
+    // belly shipped). Take-2 mark (555,-30) y=9.5, over the roof's
+    // west slope: from the camera at (531.7,-38.1) it sits ~5 deg
+    // off-axis at ~23 deg elevation — screen ~(695,98) of 1280x720
+    // with the rotor top ~35 px inside the frame.
+    if (window.CoralPolice && CoralPolice.searchlight) CoralPolice.searchlight.poolRadius = 5.0;
     var h = CoralPolice.heliState;
-    h.x = 556; h.z = -41; h.y = 10.5; h.heading = 2.6;
-    h.tx = 539.5; h.tz = -38; // cone on Mara
+    h.x = 555; h.z = -30; h.y = 9.5; h.heading = 2.6;
+    h.tx = 538; h.tz = -36.5; // cone on Mara
     Coral3D.setTime(17.8);
   }
   function stageCover() {
     if (!window.__bigMission('kopdes', 'peak')) throw new Error('kopdes peak hook returned false');
     Coral3D.setTime(17.8); // golden hour on the west facade
     return delay(700).then(function () {
-      return exitCarTo(539.5, -38, -Math.PI / 2); // face EAST, into the facade
+      // G-A repair, take 2: Mara at (538,-36.5) — the gap in the
+      // x=535.6 palm row (palms at z -47 and -26; take 1 stood her
+      // directly in front of the -26 palm and its crown covered
+      // the sign). Heading -1.82 rad: east tipped ~14 deg south,
+      // which swings the sign panel (z -33.3..-25.1) to screen
+      // x ~595..850 of 1280 — clear of the crew-chip stack
+      // (x >= ~1000) and of both left HUD panels. Her aim line
+      // crosses the facade at z ~ -33.5, at the panel's north edge.
+      return exitCarTo(538, -36.5, -1.82);
     }).then(function () {
       // Spark backstop: a dark parked car side-on across the aim
-      // line, in front of the red doors (orange sparks pop on its
-      // dark flank; on her red sport car they vanished). Her own
-      // car parks off-line at the south doors. Both static while
+      // line 6.5 m ahead of Mara (orange sparks pop on its dark
+      // flank; on her red sport car they vanished). Closer than
+      // the old 8 m mark so the spark box reads larger. Her own
+      // car parks off-line behind the camera. Both static while
       // she is on foot.
-      placeBackstop(pickBackstop(), 543.5, -38, Math.PI / 2);
-      if (Coral3D.allCars[0]) {
-        Coral3D.allCars[0].x = 541; Coral3D.allCars[0].z = -34.8;
-        Coral3D.allCars[0].heading = Math.PI / 2; Coral3D.allCars[0].speed = 0;
+      // G-A take 4: Mara's own SPORT car as backstop. The spark
+      // box spawns at the target car's CENTRE (combat3d fire())
+      // and rises 1.0 -> ~1.43 m: a tall SUV swallowed it whole
+      // (take 2) and a sedan's ~1.35 m roof left it a ~0.1 m peek
+      // (take 3, still invisible). The sport car's roof is ~1.1 m,
+      // so the spark clears it by ~0.3 m and reads against the
+      // facade behind — the old 'sparks vanish on red paint'
+      // objection only applied while the spark sat ON the paint.
+      // 5.5 m ahead of Mara, on her aim line. The dark sedan the
+      // old code used parks off-line instead (below).
+      // G-A take 6: backstop at t=10.8 (548.5,-33.8), just west of
+      // the facade. Projection maths (verified against live
+      // captures): at the old t=5.5 the spark — which spawns on
+      // the aim line at the target's CENTRE — projects exactly
+      // behind Mara's head and is occluded in every take; at
+      // t=10.8 the risen spark (y up to 1.43) projects ~20 px
+      // ABOVE her head against the doors/panel. During the scan
+      // no hook-position guard sits inside the fire cone (all fail
+      // combat3d's lateral test), so the car is the target at any
+      // range and every shot sparks on it.
+      placeBackstop(Coral3D.allCars[0], 548.5, -33.8, Math.PI / 2);
+      var sedan = null, sedanLum = 1e9;
+      for (var si = 1; si < Coral3D.allCars.length; si++) {
+        var sc2 = Coral3D.allCars[si];
+        if (sc2.variant !== 'sedan') continue;
+        var scol = sc2.color || 0xffffff;
+        var slum = 0.3 * ((scol >> 16) & 255) + 0.5 * ((scol >> 8) & 255) + 0.2 * (scol & 255);
+        if (slum < sedanLum) { sedanLum = slum; sedan = sc2; }
       }
-      Coral3D.teleport(539.5, -38);
-      Coral3D.mara.heading = -Math.PI / 2;
+      if (sedan) placeBackstop(sedan, 533, -44, 0.3);
+      Coral3D.teleport(538, -36.5);
+      Coral3D.mara.heading = -1.82;
       return waitVisible(5000); // heli spotlight sees her almost at once
     }).then(function () {
-      Coral3D.teleport(539.5, -38);
-      Coral3D.mara.heading = -Math.PI / 2;
+      Coral3D.teleport(538, -36.5);
+      Coral3D.mara.heading = -1.82;
       return delay(900); // foot camera settles behind Mara
     }).then(function () {
-      return scanFireFreeze(placeCoverTableau, 12000);
+      // G-A take 5: suppress the searchlight cone/pool during the
+      // scan — its additive warm shaft sweeps as AIR ONE settles
+      // on Mara and its changing pixels false-trigger the
+      // differential scan on frames with no visible flash/spark
+      // (takes 2-4 all 'hit' yet shipped clean). placeCoverTableau
+      // restores poolRadius 5.0 in the freeze tick, so the frozen
+      // frame still shows the cone raking down to Mara.
+      if (window.CoralPolice && CoralPolice.searchlight) CoralPolice.searchlight.poolRadius = 0.01;
+      return scanFireFreeze(placeCoverTableau, 14000);
     });
   }
 
@@ -387,41 +441,61 @@
     if (!window.__bigMission('mbg', 'peak')) throw new Error('mbg peak hook returned false');
     Coral3D.setTime(18.1); // deeper dusk — flames pop against the blue roof
     return delay(700).then(function () {
-      window.__shotCam = { dist: 9, height: 3.4, lookY: 5.4 };
       Coral3D.teleport(531, 44);
       if (car()) { car().heading = -Math.PI / 2; car().speed = 0; } // face EAST, at the facade
       Coral3D.setWanted(3); // hook-peak spec: 3 stars for the arson frame
-      // Tame the centre fire's smoke column: at intensity 1 its
-      // smoke tops out ~34 m, which no camera that also fits the
-      // facade can hold; at 0.6 the column tops ~28 m and fits the
-      // pitched-up frame while the flames stay large (fs 1.31).
-      CoralFire.setIntensity('mbg', 0.6);
-      // Flame wall ON the building: overlapping live fire instances
-      // hugging the west face under the sign band. Instance centres
-      // sit EAST of the band's west face (546.4) so the band occludes
-      // the cone bases: flames lick up behind the band and over the
-      // porch. Smoke tops at these scales: ~26 m — inside the frame.
-      CoralFire.create('mbgW1', 551, 37, 1.15); CoralFire.setIntensity('mbgW1', 1);
-      CoralFire.create('mbgW2', 551, 40.5, 1.0); CoralFire.setIntensity('mbgW2', 1);
-      CoralFire.create('mbgW3', 551, 44, 1.25); CoralFire.setIntensity('mbgW3', 1);
-      CoralFire.create('mbgW4', 551, 47.5, 1.0); CoralFire.setIntensity('mbgW4', 1);
-      CoralFire.create('mbgW5', 551, 51, 1.15); CoralFire.setIntensity('mbgW5', 1);
+      // G-A repair: Mara ON FOOT at (532,44), facing the facade.
+      // The old car-mode staging shipped with no player in frame
+      // and a "SPORT 0 KM/H" HUD; the foot camera (dist 6.5,
+      // height 2.8, top edge ~+22 deg) fits Mara large in the
+      // foreground, the sign band (y 3.75..5.65 at x 547.4, ~22 m
+      // out, ~5 deg elevation) mid-frame and the blue roof above.
+      return exitCarTo(532, 44, -Math.PI / 2);
+    }).then(function () {
+      // Her getaway car parks behind the foot camera, out of frame.
+      if (Coral3D.allCars[0]) {
+        Coral3D.allCars[0].x = 524; Coral3D.allCars[0].z = 53;
+        Coral3D.allCars[0].heading = 0.5; Coral3D.allCars[0].speed = 0;
+      }
+      Coral3D.teleport(532, 44);
+      Coral3D.mara.heading = -Math.PI / 2;
+      // Tame the centre fire (558,44, scale 1.6): at 0.25 its flames
+      // stay hidden inside the building and its smoke is a modest
+      // wisp behind the roof apex instead of the blob that ate the
+      // sign band in the shipped car-mode take.
+      CoralFire.setIntensity('mbg', 0.25);
+      // G-A repair: TWO large fires only, at the facade's corners
+      // on the camera side (x 545, just west of the porch), NOT a
+      // five-fire wall under the band. Their smoke columns stand
+      // at z ~30.5 / ~58.5 — north and south of the band's z span
+      // (33.8..54.2) — so the SPPG / DAPUR MBG lettering stays
+      // clear of the smoke mass while the flame cones (scale 1.45,
+      // ~9.5 m tongues, ~20 m from the camera) read large and
+      // close at both ends of the facade.
+      CoralFire.create('mbgN', 545, 30.5, 1.45); CoralFire.setIntensity('mbgN', 1);
+      CoralFire.create('mbgS', 545, 58.5, 1.45); CoralFire.setIntensity('mbgS', 1);
       return waitVisible(8000);
     }).then(function () {
-      Coral3D.teleport(531, 44);
-      if (car()) { car().heading = -Math.PI / 2; car().speed = 0; }
-      return delay(1000); // pitched-up camera settles
+      Coral3D.teleport(532, 44);
+      Coral3D.mara.heading = -Math.PI / 2;
+      return delay(1000); // foot camera settles behind Mara
     }).then(function () {
+      // Both police units FULLY in frame on the forecourt (G-A
+      // repair: the shipped take half-cropped them at the frame
+      // edges). From the camera at (525.5,44) these marks sit at
+      // ~24 deg azimuth — well inside the ~46 deg half-FOV.
       var u = activeUnits();
-      placeUnit(u[0], 538, 38, -Math.PI / 2 + 0.35); // north forecourt (x clear of the left HUD panel)
-      placeUnit(u[1], 536, 54, -Math.PI / 2 - 0.35); // south forecourt, fully in frame
+      placeUnit(u[0], 540, 37.5, -Math.PI / 2 + 0.35); // north forecourt
+      placeUnit(u[1], 540, 50.5, -Math.PI / 2 - 0.35); // south forecourt
       Coral3D.setTime(18.1);
-      // A beat with the units in sight of the car (SEARCHING clears
-      // on the response panel), then re-place them and freeze.
+      // A beat with the units in sight (SEARCHING clears on the
+      // response panel), then re-place them in the freeze tick.
       return delay(400).then(function () {
         var u2 = activeUnits();
-        placeUnit(u2[0], 538, 38, -Math.PI / 2 + 0.35);
-        placeUnit(u2[1], 536, 54, -Math.PI / 2 - 0.35);
+        placeUnit(u2[0], 540, 37.5, -Math.PI / 2 + 0.35);
+        placeUnit(u2[1], 540, 50.5, -Math.PI / 2 - 0.35);
+        Coral3D.teleport(532, 44);
+        Coral3D.mara.heading = -Math.PI / 2;
         Coral3D.setTime(18.1);
         return freeze();
       });
@@ -454,14 +528,37 @@
     CoralMissions.heliCam = function () {
       var h = CoralPolice.heliState;
       if (!h || !h.active) return origHeliCam();
-      // South of AIR ONE, looking north across the line: the heli
-      // and its bucket hang over the flame cones, the charred strip
-      // fills the lower centre, and the post road (z -375) crosses
-      // as a band at the very bottom instead of receding through
-      // the frame. (The camera lerp lags the moving target, so the
-      // effective standoff is ~25 m.)
-      return { x: h.x - 10, y: 9.5, z: h.z + 24, lx: h.x + 3, ly: 9, lz: h.z - 6 };
+      // G-A repair, take 2: a FIXED camera the heli flies through.
+      // Take 1's tracking camera never got close — main3d lerps
+      // camPos toward heliCam at 0.08/frame, so at SwiftShader
+      // frame rates the camera trailed the 30 m/s heli by ~30 m
+      // and AIR ONE still shipped small. A static target settles
+      // exactly: camera (335,10.5,-393) looking at (378,13.5,-402)
+      // — east along the fire line (run segment (75,-400) ->
+      // (475,-400)) with a ~4 deg up-pitch. When the poll freezes
+      // the heli at x 368..382 the standoff is 33..47 m: AIR ONE
+      // (y 27) sits ~18 deg above the axis (screen y ~150/720,
+      // ~145 px of rotor), the bucket hangs at y ~19.8, and the
+      // additive stream sheet runs bucket -> splash disc at
+      // (h.x,-400) inside the same vertical span (ground there is
+      // ~19 deg below the axis, screen y ~570/720). The plume
+      // (300,-512) is ~105 deg off-axis — fully out of frame; the
+      // post road (z -375) only clips the bottom-right corner; the
+      // charred strip fills the lower-left/centre.
+      return { x: 335, y: 10.5, z: -393, lx: 378, ly: 13.5, lz: -402 };
     };
+    // G-A repair fire staging: the mission fire under the drop
+    // window (kh3 at (375,-412)) is weakened to a wisp (intensity
+    // 0.1 — its smoke shrinks to ~2 m radius instead of a 10 m
+    // column swallowing the stream), and two LARGE staging fires
+    // flank the drop point along the line: (390,-388) south and
+    // (392,-416) north, ~15-19 m past the splash, so big flame
+    // cones stand in the lower frame on both sides of the stream
+    // while their smoke columns rise off-centre. kh4 (475,-400)
+    // keeps burning far down the line as a small background fire.
+    CoralFire.create('khShotA', 386, -390, 1.85); CoralFire.setIntensity('khShotA', 1);
+    CoralFire.create('khShotB', 388, -414, 1.85); CoralFire.setIntensity('khShotB', 1);
+    CoralFire.setIntensity('kh3', 0.1);
     return delay(300).then(function () {
       Coral3D.setWanted(2); // hook-peak spec
       // Fast-forward the bucket loop into the fire-run segment
@@ -478,14 +575,32 @@
       }
       return ff();
     }).then(function () {
+      // G-A take 3: park the player car at (340,-410), north of the
+      // drop point. main3d's base chase camera targets the CAR and
+      // its lerp (k ~0.25/frame) beats the heliCam lerp (0.08), so
+      // in takes 1-2 the effective camera stayed near the command
+      // post and AIR ONE shipped small. With the car here, the base
+      // target (~(329,5.2,-410)) and the fixed heliCam target
+      // (335,10.5,-393) agree: the equilibrium camera sits at
+      // ~(330,6.5,-406), ~45 m from the frozen heli — rotor ~128 px
+      // wide, bucket + stream + splash in one vertical span. The
+      // car is re-teleported every poll tick so it cannot creep
+      // east and drag the camera with it (the tick teleport also
+      // keeps pursuit units from settling into a bust).
+      Coral3D.teleport(340, -410);
+      if (car()) { car().heading = -Math.PI / 2; car().speed = 0; }
       // Real-time poll for the mid-line drop window.
       var t0 = Date.now();
       function poll() {
         var h = CoralPolice.heliState;
         if (Coral3D.stats().wanted !== 2) Coral3D.setWanted(2); // shunt creep guard
-        if (car()) car().speed = 6; // bust protection while units sit on the car
+        Coral3D.teleport(340, -410);
+        if (car()) { car().heading = -Math.PI / 2; car().speed = 6; }
         if (h.x >= 240) CoralPolice.dropping = 1.1; // stream alive through the window
-        if (h.y > 25 && h.z < -390 && h.x >= 282 && h.x <= 318) {
+        // G-A window: heli at x 368..382 — near-directly over the
+        // weakened kh3 point (375,-412), splash between the two
+        // large flanking staging fires.
+        if (h.y > 25 && h.z < -390 && h.x >= 368 && h.x <= 382) {
           CoralPolice.dropping = 1.1; // bucket stream renders while > 0
           CoralFire.splash(h.x, h.z);
           Coral3D.setTime(17.5);

@@ -89,9 +89,20 @@ function bakeCarInto(b, variant, colorHex) {
       var sxp = sd * (dims.w / 2 + 0.014);
       b.panel(0x1d4e9e, { x: sxp, y: bodyY - 0.02, z: 0, w: 0.03, h: 0.3, d: dims.l * 0.86 });
       b.panel(0xd42b1e, { x: sxp, y: bodyY + 0.19, z: 0, w: 0.03, h: 0.07, d: dims.l * 0.86 });
+      /* F4C-G-B legibility fix: the flank letters used to sit straight
+         on the mid-blue stripe (its band covers every glyph row), so
+         at dossier distance the white glyph edges washed out and the
+         asymmetric letters (P/L/S) read distorted / mirror-like on
+         the flanks. Each door now carries a dark letter plate, proud
+         of the blue stripe (outer 0.94 vs stripe 0.929) and of the
+         overlay trim line, with the same white POLISI glyphs drawn
+         larger (px 0.085) and centred between the wheels — identical
+         construction on both sides (nx = sd), so the word reads
+         left-to-right from either flank. */
+      b.panel(0x14171c, { x: sd * (dims.w / 2 + 0.025), y: bodyY - 0.055, z: 0, w: 0.03, h: 0.44, d: 2.04 });
       // glyphs sit proud of the flank: sign centre pulled in by the
       // 0.16 normal offset signText adds (see kopdes usage)
-      signText(b, 'POLISI', { x: sd * (dims.w / 2 - 0.13), y: bodyY - 0.02, z: 0.1, nx: sd, nz: 0, px: 0.07, color: 0xf5f6f8, emis: 0.25, board: null });
+      signText(b, 'POLISI', { x: sd * (dims.w / 2 - 0.13), y: bodyY - 0.055, z: 0, nx: sd, nz: 0, px: 0.085, color: 0xf5f6f8, emis: 0.25, board: null });
     });
     // POLISI across the boot too, for the chase-cam rear read
     signText(b, 'POLISI', { x: 0, y: bodyY + 0.22, z: dims.l / 2 - 0.13, nx: 0, nz: 1, px: 0.07, color: 0x1d4e9e, emis: 0.2, board: null });
