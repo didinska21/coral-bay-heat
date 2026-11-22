@@ -22,6 +22,7 @@
 var CoralPeople = (function () {
   var MARA = { shirt: 0x0e7c86, pants: 0x23262e, skin: 0xc98a5e };
   var figureCache = {};
+  var shadowMesh = null; // shared cheap ground-shadow disc (F4C-2)
 
   function figureFor(gl, shirt, pants, skin) {
     var key = shirt + '_' + pants + '_' + skin;
@@ -40,6 +41,11 @@ var CoralPeople = (function () {
     legB.box(0x1c1e22, { x: 0, y: -0.70, z: -0.03, w: 0.17, h: 0.10, d: 0.27 });         // shoe
     f = { body: body.build(gl), arm: armB.build(gl), leg: legB.build(gl) };
     figureCache[key] = f;
+    if (!shadowMesh) { // one flat dark disc, reused under every figure
+      var sb = new Baker();
+      sb.cylinder(0x0b0d10, { x: 0, y: 0, z: 0, r: 0.46, h: 0.03, seg: 10 });
+      shadowMesh = sb.build(gl);
+    }
     return f;
   }
 
@@ -138,6 +144,35 @@ var CoralPeople = (function () {
     return { peds: peds, gl: gl };
   }
 
+  /* Staging-only crowd cluster (screenshots): spots are [x, z, heading].
+     The first spots reuse existing crowd peds (repositioned, facing set,
+     parked with a long wait so live ticks before a freeze don't drift
+     them); any overflow spots spawn fresh ambient figures appended to
+     the crowd. No AI changes — updateCrowd treats them as waiting peds. */
+  function addStagingCluster(crowd, spots) {
+    var placed = 0;
+    for (var i = 0; i < spots.length; i++) {
+      var s = spots[i], p;
+      if (i < crowd.peds.length) {
+        p = crowd.peds[i];
+      } else {
+        p = createPerson(crowd.gl, {
+          shirt: SeededRandom.pick(crowdRng, SHIRTS),
+          pants: SeededRandom.pick(crowdRng, PANTS),
+          skin: SeededRandom.pick(crowdRng, SKINS)
+        }, s[0], s[1], s[2] || 0);
+        p.target = { x: s[0], z: s[1] };
+        p.walkSpeed = 1.3;
+        crowd.peds.push(p);
+      }
+      p.x = s[0]; p.z = s[1];
+      if (s[2] !== undefined) p.heading = s[2];
+      p.down = false; p.downTime = 0; p.speed = 0; p.wait = 9999;
+      placed++;
+    }
+    return placed;
+  }
+
   function updateCrowd(crowd, dt, px, pz) {
     var peds = crowd.peds;
     for (var i = 0; i < peds.length; i++) {
@@ -177,6 +212,8 @@ var CoralPeople = (function () {
       R.draw(p.parts.body, Mat4.compose(p.x, 0.28, p.z, Math.PI / 2 - 0.12, p.heading, 0));
       return;
     }
+    if (shadowMesh) // grounded shadow first (no depth write, just above the road)
+      R.draw(shadowMesh, Mat4.compose(p.x, 0.06, p.z, 0, 0, 0), { noDepthWrite: true });
     var bob = p.speed > 0.1 ? Math.abs(Math.sin(p.walkPhase)) * 0.05 : 0;
     var swing = Math.sin(p.walkPhase) * (p.speed > 5 ? 0.85 : 0.55) * Math.min(1, p.speed / 2.5);
     var base = Mat4.compose(p.x, bob, p.z, 0, p.heading, 0);
@@ -202,6 +239,7 @@ var CoralPeople = (function () {
     MARA: MARA, figureFor: figureFor, createPerson: createPerson,
     createPlayer: createPlayer, updatePlayer: updatePlayer,
     createCrowd: createCrowd, updateCrowd: updateCrowd,
+    addStagingCluster: addStagingCluster,
     draw: draw, drawCrowd: drawCrowd, collidePerson: collidePerson
   };
 }());

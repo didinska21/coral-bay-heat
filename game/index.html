@@ -40,7 +40,7 @@
   .hud-slot { background: rgba(10, 16, 22, 0.78); border: 2px solid #5a6a76; border-radius: 6px;
     padding: 6px 10px; font-weight: 800; font-size: 14px; color: #9fb2bf; }
   .hud-slot.on { border-color: #ffd23e; color: #ffd23e; }
-  .hud-dialogue { position: fixed; z-index: 5; left: 50%; bottom: 26px; transform: translateX(-50%);
+  .hud-dialogue { position: fixed; z-index: 5; left: 47%; bottom: 60px; transform: translateX(-50%);
     width: min(560px, 80vw); background: rgba(10, 16, 22, 0.85); border: 2px solid #ffd23e;
     border-radius: 8px; padding: 10px 14px; display: flex; gap: 12px; align-items: flex-start; }
   .hud-dlg-chip { flex: none; width: 34px; height: 34px; border-radius: 50%; background: #ff5847;
@@ -53,7 +53,7 @@
     letter-spacing: 0.05em; }
   .hud-vignette { position: fixed; inset: 0; pointer-events: none; z-index: 6;
     background: radial-gradient(ellipse at center, rgba(200, 0, 0, 0) 55%, rgba(200, 0, 0, 0.55) 100%); }
-  .hud-hint { position: fixed; z-index: 5; bottom: 252px; left: 14px; font-size: 13px; font-weight: 600;
+  .hud-hint { position: fixed; z-index: 5; bottom: 286px; left: 14px; font-size: 13px; font-weight: 600;
     color: #dfe9ee; background: rgba(10, 16, 22, 0.6); border-radius: 6px; padding: 5px 10px; }
   .hud-district { position: fixed; z-index: 5; left: 14px; bottom: 174px; min-width: 176px;
     background: rgba(10, 16, 22, 0.78); border: 2px solid #19e3c2; border-radius: 6px; padding: 7px 12px; }
@@ -77,9 +77,13 @@
     font-size: 18px; font-weight: 800; letter-spacing: 0.05em; padding: 12px 34px; margin: 5px;
     cursor: pointer; font-family: inherit; }
   .menu-btn:hover { background: #ffd23e; color: #14202a; }
-  #menu-pause { background: rgba(5, 8, 14, 0.42); }
-  .menu-panel { background: rgba(10, 16, 22, 0.9); border: 2px solid #19e3c2; border-radius: 10px;
-    padding: 26px 38px; min-width: 320px; }
+  #menu-pause { background: rgba(5, 8, 14, 0.58); }
+  /* While the pause dashboard is open the gameplay HUD is fully hidden
+     (menus3d toggles body.menu-paused) — no crew pills, radio or speed
+     lines can leak or clip around the panel edges. */
+  body.menu-paused #hud-root, body.menu-paused .hud-vignette { visibility: hidden !important; }
+  .menu-panel { background: rgba(10, 16, 22, 0.92); border: 2px solid #19e3c2; border-radius: 10px;
+    padding: 18px 22px; min-width: 320px; }
   .menu-heading { font-size: 26px; font-weight: 900; letter-spacing: 0.05em; }
   .menu-completion { font-size: 30px; font-weight: 900; color: #ffd23e; margin: 10px 0; }
   .menu-stats { font-size: 16px; line-height: 1.6; text-align: left; margin-bottom: 18px; }

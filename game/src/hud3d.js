@@ -3,7 +3,12 @@
    panels, money/stars/respect/clock, a 200x150 minimap with a
    pre-rendered static layer, weapon slots, vehicle + speed, radio pill,
    dialogue box, centre toasts, damage vignette and a fading controls
-   hint. ONE 100 ms interval drives everything; panel text refreshes at
+   hint. F4C adds: crew ability chips (top-right), a district standing
+   meter (derived display-only from respect / missions done), a 5-slot
+   weapon strip (slots 3-5 locked presentation) and a vehicle BODY %
+   readout (HUD-local cosmetic wear accumulated from the car's existing
+   transient `impact` field — no game state is touched). ONE 100 ms
+   interval drives everything; panel text refreshes at
    ~5 Hz inside it; every style write is cached. Hidden in title /
    busted / wasted states and for ?shot=smoke; visible in the other
    ?shot= entry modes. */
@@ -66,6 +71,35 @@
   var healthOuter = el('div', null, 'hud-bar-outer hud-health-outer', healthRow);
   var healthInner = el('div', 'hud-health-bar', 'hud-bar-inner', healthOuter);
   el('span', 'hud-health-num', 'hud-health-num', healthRow, '100');
+  /* district standing: slim reputation bar + tier word for the current
+     district, derived display-only from global respect + missions done */
+  var standRow = el('div', null, 'hud-health-row', districtBox);
+  el('span', null, 'hud-health-label', standRow, 'STANDING');
+  var standOuter = el('div', null, 'hud-bar-outer hud-health-outer', standRow);
+  var standInner = el('div', 'hud-standing-bar', 'hud-bar-inner', standOuter);
+  standInner.style.background = '#ff9ecf';
+  var standTier = el('span', 'hud-standing-tier', 'hud-health-num', standRow, 'UNKNOWN');
+  standTier.style.minWidth = '86px';
+
+  /* crew ability chips: compact role-trait chips for the cast */
+  var crewBox = el('div', 'hud-crew', null, root);
+  crewBox.style.cssText = 'position:fixed;z-index:5;top:158px;right:14px;display:flex;' +
+    'flex-direction:column;gap:5px;align-items:flex-end;pointer-events:none;';
+  [
+    { init: 'M', name: 'MAYA', trait: 'NITRO BURST — getaway boost', color: '#ff5847' },
+    { init: 'D', name: 'DIMAS', trait: 'LOOKOUT — police search drains faster', color: '#3e7bff' },
+    { init: 'S', name: 'TANTE SARI', trait: 'SAFEHOUSE — hide at the Phinisi', color: '#c9930a' }
+  ].forEach(function (c) {
+    var chip = el('div', null, null, crewBox);
+    chip.style.cssText = 'background:rgba(10,16,22,0.78);border:2px solid ' + c.color +
+      ';border-radius:999px;padding:3px 11px 3px 4px;font-size:11.5px;font-weight:700;' +
+      'color:#dfe9ee;display:flex;align-items:center;gap:7px;white-space:nowrap;';
+    var dot = el('span', null, null, chip, c.init);
+    dot.style.cssText = 'flex:none;width:20px;height:20px;border-radius:50%;background:' +
+      c.color + ';color:#fff;font-weight:800;font-size:12px;display:flex;' +
+      'align-items:center;justify-content:center;';
+    el('span', null, null, chip, c.name + ' · ' + c.trait);
+  });
 
   /* bottom-right: weapons / vehicle / radio */
   var br = el('div', null, 'hud-br', root);
@@ -74,9 +108,16 @@
   var vehRow = el('div', null, 'hud-veh-row', br);
   el('span', 'hud-vehicle', 'hud-vehicle', vehRow, '');
   el('span', 'hud-speed', 'hud-speed', vehRow, '');
+  var bodyEl = el('span', 'hud-body', null, vehRow, '');
+  bodyEl.style.cssText = 'font-size:16px;font-weight:800;letter-spacing:0.06em;margin-left:12px;';
   var weapons = el('div', 'hud-weapons', 'hud-weapons', br);
   var slot1 = el('span', null, 'hud-slot', weapons, '1 FISTS');
   var slot2 = el('span', null, 'hud-slot', weapons, '2 PISTOL');
+  /* slots 3-5: locked / undiscovered presentation only — no weapons logic */
+  ['3 SMG —', '4 SHOTGUN —', '5 MOLOTOV —'].forEach(function (label) {
+    var s = el('span', null, 'hud-slot', weapons, label);
+    s.style.opacity = '0.42';
+  });
 
   /* bottom-centre: dialogue */
   var dlg = el('div', 'hud-dialogue', 'hud-dialogue', root);
@@ -107,44 +148,73 @@
       c.fillStyle = TINTS[d.id] || '#444444';
       c.fillRect(mapX(d.minX), 0, mapX(d.maxX) - mapX(d.minX), 150);
     });
-    c.strokeStyle = '#d7dde3'; c.lineWidth = 2; c.beginPath();
-    CoralCity.roads.segments.forEach(function (s) {
-      c.moveTo(mapX(s.ax), mapY(s.az)); c.lineTo(mapX(s.bx), mapY(s.bz));
+    /* street network: dark asphalt bands first, then a pale centreline,
+       so the grid reads as roads on land, not graph paper (F4C-2) */
+    function roadPath() {
+      c.beginPath();
+      CoralCity.roads.segments.forEach(function (s) {
+        c.moveTo(mapX(s.ax), mapY(s.az)); c.lineTo(mapX(s.bx), mapY(s.bz));
+      });
+    }
+    c.strokeStyle = '#20242c'; c.lineWidth = 5; c.lineCap = 'round'; roadPath(); c.stroke();
+    c.strokeStyle = '#aeb9c2'; c.lineWidth = 1; roadPath(); c.stroke();
+    /* district labels so the map reads as a place, not a colour grid */
+    c.fillStyle = 'rgba(255,255,255,0.6)'; c.font = 'bold 6.5px system-ui, sans-serif';
+    c.textAlign = 'center';
+    CoralCity.districts.forEach(function (d) {
+      var label = String(d.name || d.id).toUpperCase().split(' ')[0];
+      c.fillText(label, (mapX(d.minX) + mapX(d.maxX)) / 2, 12);
     });
-    c.stroke();
+    c.textAlign = 'left';
   }());
 
   function drawMinimap(st, tick) {
     mtx.drawImage(staticMap, 0, 0);
+    var p = Coral3D.player;
+    var px = mapX(p.pos.x), py = mapY(p.pos.z);
     var obj = window.Coral3D ? Coral3D.objective() : null;
     if (obj) {
+      var ox = mapX(obj.x), oy = mapY(obj.z);
+      /* route: dashed gold L along the street grid, player -> objective */
+      mtx.strokeStyle = 'rgba(255,210,62,0.85)'; mtx.lineWidth = 2;
+      mtx.setLineDash([4, 3]); mtx.beginPath();
+      mtx.moveTo(px, py); mtx.lineTo(ox, py); mtx.lineTo(ox, oy); mtx.stroke();
+      mtx.setLineDash([]);
+      /* mission marker: filled gold disc + pulsing ring */
       mtx.strokeStyle = '#ffd23e'; mtx.lineWidth = 2;
-      mtx.beginPath(); mtx.arc(mapX(obj.x), mapY(obj.z), 5 + (tick % 3), 0, 6.2832); mtx.stroke();
+      mtx.beginPath(); mtx.arc(ox, oy, 5 + (tick % 3), 0, 6.2832); mtx.stroke();
+      mtx.fillStyle = '#ffd23e';
+      mtx.beginPath(); mtx.arc(ox, oy, 3, 0, 6.2832); mtx.fill();
+      mtx.fillStyle = '#20242c';
+      mtx.beginPath(); mtx.arc(ox, oy, 1.2, 0, 6.2832); mtx.fill();
     }
     if (window.CoralPolice) {
       var flash = (tick % 2 === 0) ? '#ff4040' : '#3e7bff';
       CoralPolice.units.forEach(function (u) {
         if (!u.active || !u.car) return;
-        mtx.fillStyle = flash;
-        mtx.fillRect(mapX(u.car.x) - 2, mapY(u.car.z) - 2, 4, 4);
+        mtx.fillStyle = flash; mtx.strokeStyle = '#ffffff'; mtx.lineWidth = 1;
+        mtx.beginPath(); mtx.arc(mapX(u.car.x), mapY(u.car.z), 3, 0, 6.2832); mtx.fill(); mtx.stroke();
       });
       if (CoralPolice.heliActive && CoralPolice.heliState) {
+        var hx = mapX(CoralPolice.heliState.x), hy = mapY(CoralPolice.heliState.z);
         mtx.fillStyle = '#ffffff';
-        mtx.fillRect(mapX(CoralPolice.heliState.x) - 2, mapY(CoralPolice.heliState.z) - 2, 4, 4);
+        mtx.beginPath();
+        mtx.moveTo(hx, hy - 4); mtx.lineTo(hx + 3.4, hy); mtx.lineTo(hx, hy + 4); mtx.lineTo(hx - 3.4, hy);
+        mtx.closePath(); mtx.fill();
       }
     }
-    var p = Coral3D.player;
-    var px = mapX(p.pos.x), py = mapY(p.pos.z);
     var dx = -Math.sin(p.heading), dy = -Math.cos(p.heading);
     var a = Math.atan2(dy, dx);
-    mtx.fillStyle = '#19e3c2';
+    mtx.fillStyle = '#19e3c2'; mtx.strokeStyle = '#ffffff'; mtx.lineWidth = 1.2;
     mtx.beginPath();
-    mtx.moveTo(px + Math.cos(a) * 6, py + Math.sin(a) * 6);
-    mtx.lineTo(px + Math.cos(a + 2.5) * 4.5, py + Math.sin(a + 2.5) * 4.5);
-    mtx.lineTo(px + Math.cos(a - 2.5) * 4.5, py + Math.sin(a - 2.5) * 4.5);
-    mtx.closePath(); mtx.fill();
+    mtx.moveTo(px + Math.cos(a) * 7.5, py + Math.sin(a) * 7.5);
+    mtx.lineTo(px + Math.cos(a + 2.5) * 5.5, py + Math.sin(a + 2.5) * 5.5);
+    mtx.lineTo(px + Math.cos(a - 2.5) * 5.5, py + Math.sin(a - 2.5) * 5.5);
+    mtx.closePath(); mtx.fill(); mtx.stroke();
     mtx.fillStyle = '#ffffff'; mtx.font = 'bold 11px system-ui, sans-serif';
-    mtx.fillText('N', 192, 12);
+    mtx.textAlign = 'right'; // right-edge anchored: left-aligned at x=192 clipped the glyph
+    mtx.fillText('N', 195, 12);
+    mtx.textAlign = 'left';
   }
 
   /* ------------------------------------------------------------- toasts */
@@ -178,6 +248,19 @@
     if (e.code === 'Digit2') weapon = 2;
   });
 
+  /* vehicle BODY %: HUD-local cosmetic wear. The game has no persistent
+     vehicle-HP field; cars expose a transient `impact` (m/s, reset each
+     physics frame). We sample it every tick, accumulate wear per car
+     instance, and reset to 100% when a different car is entered. */
+  var vehBody = 100, vehSeen = null;
+  function sampleVehicleWear() {
+    if (!window.Coral3D || Coral3D.state !== 'play') return;
+    var vi = Coral3D.vehicleInstance;
+    if (!vi) { vehSeen = null; return; }
+    if (vi !== vehSeen) { vehSeen = vi; vehBody = 100; }
+    if (vi.impact > 4) vehBody = Math.max(0, vehBody - (vi.impact - 4) * 0.9);
+  }
+
   var tick = 0, playSeconds = 0;
   var prevCompleted = -1, prevMoney = 0, prevRank = '', prevStory = false, prevHealth = 100;
   var vigFlashUntil = 0;
@@ -194,6 +277,7 @@
     setDisplay(root, 'root', inGame ? '' : 'none');
     if (!inGame) { setDisplay(vignette, 'vig', 'none'); return; }
     if (state === 'play') playSeconds += 0.1;
+    sampleVehicleWear();
 
     pumpToasts(performance.now());
 
@@ -270,6 +354,15 @@
     setStyle(healthInner, 'hpW', 'width', hp + '%');
     setStyle(healthInner, 'hpC', 'background', hp > 50 ? '#7dff9a' : hp > 25 ? '#ffd23e' : '#ff5847');
     setText(document.getElementById('hud-health-num'), 'hpN', String(hp));
+    /* district standing (display-only derivation, see build note above) */
+    var dIdx = 0;
+    if (window.CoralCity) for (var di5 = 0; di5 < CoralCity.districts.length; di5++)
+      if (CoralCity.districts[di5].id === st.district) dIdx = di5;
+    var stand = Math.max(0, Math.min(100,
+      st.respect - dIdx * 12 + CoralMissions.completedCount * 4));
+    setStyle(standInner, 'standW', 'width', stand + '%');
+    setText(standTier, 'standT', stand < 20 ? 'UNKNOWN' : stand < 45 ? 'KNOWN FACE'
+      : stand < 70 ? 'TRUSTED' : stand < 90 ? 'INNER CIRCLE' : 'FAMILY');
     var stars = '';
     for (var i = 0; i < 5; i++) stars += i < st.wanted ? '★' : '☆';
     setText(document.getElementById('hud-stars'), 'stars', stars);
@@ -287,6 +380,9 @@
     if (st.mode === 'car') {
       setText(document.getElementById('hud-vehicle'), 'veh', String(st.vehicle || '').toUpperCase());
       setText(document.getElementById('hud-speed'), 'speed', Math.round(Math.abs(st.speed) * 3.6) + ' KM/H');
+      var bodyPct = Math.round(vehBody);
+      setText(bodyEl, 'body', 'BODY ' + bodyPct + '%');
+      setStyle(bodyEl, 'bodyC', 'color', bodyPct > 50 ? '#7dff9a' : bodyPct > 25 ? '#ffd23e' : '#ff5847');
       setDisplay(radio, 'radio', '');
       var idx = Math.floor(playSeconds / 20) % 9;
       var station = STATIONS[Math.floor(idx / 3)];
@@ -294,6 +390,7 @@
     } else {
       setText(document.getElementById('hud-vehicle'), 'veh', '');
       setText(document.getElementById('hud-speed'), 'speed', '');
+      setText(bodyEl, 'body', '');
       setDisplay(radio, 'radio', 'none');
     }
 

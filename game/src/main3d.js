@@ -194,6 +194,7 @@
     if (window.CoralPolice) CoralPolice.update(dt);
     if (window.CoralCombat) CoralCombat.update(dt);
     if (window.CoralMissions) CoralMissions.update(dt);
+    if (window.CoralFire) CoralFire.update(dt);
 
     /* camera */
     var f = focusEntity();
@@ -221,6 +222,15 @@
       camPos[1] = 5.5;
       camPos[2] = f.z + Math.sin(titleAngle) * 13;
       camLook = [f.x, 1.6, f.z];
+    }
+    /* M8 Karhutla: spectate AIR ONE from the command post while the
+       bucket loop runs (missions3d owns heliCamPos). */
+    var hc = (!titleMode && window.CoralMissions && CoralMissions.heliCam) ? CoralMissions.heliCam() : null;
+    if (hc) {
+      camPos[0] += (hc.x - camPos[0]) * 0.08;
+      camPos[1] += (hc.y - camPos[1]) * 0.08;
+      camPos[2] += (hc.z - camPos[2]) * 0.08;
+      camLook = [hc.lx, hc.ly, hc.lz];
     }
   }
   var camLook = [playerCar.x, 1.7, playerCar.z - 9];
@@ -267,6 +277,7 @@
     if (window.CoralPolice) CoralPolice.draw(R);
     if (window.CoralCombat) CoralCombat.draw(R);
     if (window.CoralMissions) CoralMissions.draw(R);
+    if (window.CoralFire) CoralFire.draw(R);
     var hp = heliPose(now / 1000);
     var heliModel = Mat4.compose(hp.x, hp.y, hp.z, 0, hp.heading, 0.10);
     R.draw(heli.body, heliModel);

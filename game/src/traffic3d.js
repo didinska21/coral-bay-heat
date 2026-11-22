@@ -93,6 +93,12 @@ var CoralTraffic = (function () {
     for (var i = 0; i < count; i++) {
       var variant = SeededRandom.pick(rng, VARIANTS);
       var color = SeededRandom.pick(rng, COLORS);
+      /* F4C-2: guarantee readable angkots in the staged slots — the
+         screenshot staging places traffic cars 0..5 by index, and the
+         comparator demanded at least one unmistakable angkot in frame.
+         Slot 0 = blue angkot (market frame), slot 2 = orange angkot. */
+      if (i === 0) { variant = 'angkot'; color = 0x2e7fc9; }
+      else if (i === 2) { variant = 'angkot'; color = 0xe67e22; }
       var tc = {
         seg: Math.floor(rng() * roads.segments.length),
         s: 0, dir: rng() < 0.5 ? 1 : -1,
@@ -131,7 +137,7 @@ var CoralTraffic = (function () {
       var tc = cars[i];
       var dx = tc.x - camX, dz = tc.z - camZ;
       if (dx * dx + dz * dz > 380 * 380) continue;
-      R.draw(tc.mesh, Mat4.compose(tc.x, 0, tc.z, 0, tc.heading, 0));
+      CoralVehicles.draw(R, tc); // base mesh + Fase 4C fidelity overlay + night beams
     }
   }
 

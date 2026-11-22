@@ -20,7 +20,8 @@
      stars (get), searching (get), visible (get), heliActive (get),
      blockCars, heliState, units,
      reportCrime, setWanted, setFloor, clear,
-     onBusted (assignable), update(dt), draw(R) }
+     onBusted (assignable), update(dt), draw(R),
+     setBucketMode(on), bucketMode (get), dropping (get/set, seconds) }
 */
 'use strict';
 
@@ -39,8 +40,30 @@ var CoralPolice = (function () {
   var block = null;             // {cars:[a,b], officer, x, z}
   var blockCooldown = 0;
   var heliState = { active: false, x: 0, y: 0, z: 0, heading: 0, angle: 0, tx: 0, tz: 0 };
-  var heliMesh = null, coneMesh = null, poolMesh = null, shadowMesh = null, rotorAngle = 0;
+  var heliMesh = null, coneMesh = null, coneCoreMesh = null, poolMesh = null, shadowMesh = null, rotorAngle = 0;
   var inited = false;
+  /* Searchlight staging/config hook (Fase 4C session A). Session B
+     (shots3d staging) may set rakeX/rakeZ to offset the cone APEX away
+     from the helicopter body so the shaft rakes diagonally across the
+     frame without moving AIR ONE itself, and poolRadius to size the
+     ground pool. Defaults 0/0 = apex exactly at the helicopter. */
+  var searchlightCfg = { rakeX: 0, rakeZ: 0, poolRadius: 5.0 };
+
+  /* Water-bucket mode (Fase 4C session E2, for E1's KARHUTLA
+     FIREFIGHT mission). Presentation only: no AI, no wanted changes.
+     When OFF (default) nothing in the police/searchlight path changes
+     at all — no bucket geometry is drawn and `dropping` is ignored.
+     When ON: an orange Bambi-style bucket hangs on a cable under AIR
+     ONE, swaying gently, and while `dropping` > 0 a wide falling
+     water sheet + ground splash render under it. The heli position
+     itself is still driven entirely by heliState / aimHeli callers. */
+  var bucketMode = false;
+  var droppingVal = 0;          // seconds of water left to fall
+  var bucketTime = 0;           // sway clock, advances only in bucket mode
+  var bucketMesh = null, cableMesh = null;
+  var streamMesh = null, streamCoreMesh = null, splashMesh = null, sprayMesh = null;
+  var BUCKET_CABLE = 6.2;       // cable length, heli belly -> bucket rim (m)
+  var BUCKET_H = 1.5;           // bucket rim -> bucket floor (m)
 
   var api = { onBusted: null };
 
@@ -74,6 +97,220 @@ var CoralPolice = (function () {
     return !losBlocked(unit.car.x, unit.car.z, p.x, p.z);
   }
 
+  /* Volumetric searchlight shaft, built in LOCAL space: base disc at
+     y=0 with radius `radScale`, apex at y=1. Per-vertex colours are
+     pushed straight into the Baker buffer so the fragment shader
+     interpolates a smooth vertical gradient (bright at the heli,
+     diffusing down) instead of the old flat beige cone. Drawn
+     additively: black = invisible, so the soft edges cost no alpha. */
+  function buildShaft(gl, radScale, baseB, apexB) {
+    var b = new Baker(), SEG = 14;
+    var warm = [1.0, 0.96, 0.86];
+    var rings = [0, 0.2, 0.42, 0.65, 0.85, 1.0];
+    function ringPt(t, a) {
+      var r = (1 - t) * radScale + 0.015;
+      return [Math.cos(a) * r, t, Math.sin(a) * r];
+    }
+    function bright(t) { return baseB + (apexB - baseB) * Math.pow(t, 1.5); }
+    for (var i = 0; i < rings.length - 1; i++) {
+      var t0 = rings[i], t1 = rings[i + 1], c0 = null, c1 = null;
+      c0 = [warm[0] * bright(t0), warm[1] * bright(t0), warm[2] * bright(t0)];
+      c1 = [warm[0] * bright(t1), warm[1] * bright(t1), warm[2] * bright(t1)];
+      for (var s = 0; s < SEG; s++) {
+        var a0 = (s / SEG) * Math.PI * 2, a1 = ((s + 1) / SEG) * Math.PI * 2;
+        var p00 = ringPt(t0, a0), p01 = ringPt(t0, a1), p11 = ringPt(t1, a1), p10 = ringPt(t1, a0);
+        var nx = Math.cos(a0), nz = Math.sin(a0);
+        b._push(p00[0], p00[1], p00[2], nx, 0, nz, c0, 0.92);
+        b._push(p01[0], p01[1], p01[2], nx, 0, nz, c0, 0.92);
+        b._push(p11[0], p11[1], p11[2], nx, 0, nz, c1, 0.92);
+        b._push(p00[0], p00[1], p00[2], nx, 0, nz, c0, 0.92);
+        b._push(p11[0], p11[1], p11[2], nx, 0, nz, c1, 0.92);
+        b._push(p10[0], p10[1], p10[2], nx, 0, nz, c1, 0.92);
+      }
+    }
+    return b.build(gl);
+  }
+  /* Feathered ground pool, LOCAL space: unit-radius disc in XZ with a
+     radial gradient pushed per-vertex — warm-white core falling to
+     pure black (invisible under additive blending) at the rim, so
+     there is no hard ellipse edge anywhere. */
+  function buildPool(gl) {
+    var b = new Baker(), SEG = 22;
+    var warm = [1.0, 0.95, 0.80];
+    var rings = [0, 0.30, 0.55, 0.78, 1.0];
+    var fall = [0.34, 0.24, 0.12, 0.04, 0.0];
+    function col(i) { return [warm[0] * fall[i], warm[1] * fall[i], warm[2] * fall[i]]; }
+    for (var i = 0; i < rings.length - 1; i++) {
+      for (var s = 0; s < SEG; s++) {
+        var a0 = (s / SEG) * Math.PI * 2, a1 = ((s + 1) / SEG) * Math.PI * 2;
+        var r0 = rings[i], r1 = rings[i + 1], c0 = col(i), c1 = col(i + 1);
+        var p00 = [Math.cos(a0) * r0, 0, Math.sin(a0) * r0], p01 = [Math.cos(a1) * r0, 0, Math.sin(a1) * r0];
+        var p11 = [Math.cos(a1) * r1, 0, Math.sin(a1) * r1], p10 = [Math.cos(a0) * r1, 0, Math.sin(a0) * r1];
+        if (i === 0) { // centre fan: centre -> ring(a0) -> ring(a1)
+          b._push(0, 0, 0, 0, 1, 0, c0, 0.92);
+          b._push(p10[0], 0, p10[2], 0, 1, 0, c1, 0.92);
+          b._push(p11[0], 0, p11[2], 0, 1, 0, c1, 0.92);
+        } else {
+          b._push(p00[0], 0, p00[2], 0, 1, 0, c0, 0.92);
+          b._push(p01[0], 0, p01[2], 0, 1, 0, c0, 0.92);
+          b._push(p11[0], 0, p11[2], 0, 1, 0, c1, 0.92);
+          b._push(p00[0], 0, p00[2], 0, 1, 0, c0, 0.92);
+          b._push(p11[0], 0, p11[2], 0, 1, 0, c1, 0.92);
+          b._push(p10[0], 0, p10[2], 0, 1, 0, c1, 0.92);
+        }
+      }
+    }
+    return b.build(gl);
+  }
+
+  /* Bambi bucket, LOCAL space: origin at the rim centre, body hanging
+     to y=-BUCKET_H. Open frustum (rim r=1.15, floor r=0.78) in safety
+     orange with a darker inner wall, a water disc just under the rim
+     and a steel hub on top where the cable lands. Drawn with noCull so
+     the open mouth reads from above and below. Opaque geometry. */
+  function buildBucket(gl) {
+    var b = new Baker(), SEG = 14;
+    var outer = [0.96, 0.44, 0.07], outerDk = [0.78, 0.34, 0.05];
+    var inner = [0.45, 0.19, 0.04], rim = [1.0, 0.55, 0.12];
+    var water = [0.35, 0.55, 0.75];
+    var rT = 1.15, rB = 0.78, rInT = 0.94, rInB = 0.62, H = BUCKET_H;
+    for (var s = 0; s < SEG; s++) {
+      var a0 = (s / SEG) * Math.PI * 2, a1 = ((s + 1) / SEG) * Math.PI * 2;
+      var c0 = Math.cos(a0), n0 = Math.sin(a0), c1 = Math.cos(a1), n1 = Math.sin(a1);
+      var oc = (s % 2 === 0) ? outer : outerDk; // subtle facet striping
+      // outer wall: rim -> floor
+      b._push(c0 * rT, 0, n0 * rT, c0, 0, n0, oc, 0.15);
+      b._push(c0 * rB, -H, n0 * rB, c0, 0, n0, oc, 0.15);
+      b._push(c1 * rB, -H, n1 * rB, c1, 0, n1, oc, 0.15);
+      b._push(c0 * rT, 0, n0 * rT, c0, 0, n0, oc, 0.15);
+      b._push(c1 * rB, -H, n1 * rB, c1, 0, n1, oc, 0.15);
+      b._push(c1 * rT, 0, n1 * rT, c1, 0, n1, oc, 0.15);
+      // rim annulus: outer rim -> inner rim (facing up)
+      b._push(c0 * rT, 0, n0 * rT, 0, 1, 0, rim, 0.2);
+      b._push(c1 * rT, 0, n1 * rT, 0, 1, 0, rim, 0.2);
+      b._push(c1 * rInT, 0, n1 * rInT, 0, 1, 0, rim, 0.2);
+      b._push(c0 * rT, 0, n0 * rT, 0, 1, 0, rim, 0.2);
+      b._push(c1 * rInT, 0, n1 * rInT, 0, 1, 0, rim, 0.2);
+      b._push(c0 * rInT, 0, n0 * rInT, 0, 1, 0, rim, 0.2);
+      // inner wall: inner rim -> inner floor (normals flipped inward)
+      b._push(c0 * rInT, 0, n0 * rInT, -c0, 0, -n0, inner, 0.05);
+      b._push(c1 * rInB, -H + 0.28, n1 * rInB, -c1, 0, -n1, inner, 0.05);
+      b._push(c0 * rInB, -H + 0.28, n0 * rInB, -c0, 0, -n0, inner, 0.05);
+      b._push(c0 * rInT, 0, n0 * rInT, -c0, 0, -n0, inner, 0.05);
+      b._push(c1 * rInT, 0, n1 * rInT, -c1, 0, -n1, inner, 0.05);
+      b._push(c1 * rInB, -H + 0.28, n1 * rInB, -c1, 0, -n1, inner, 0.05);
+      // floor disc (fan segment) at y=-H
+      b._push(0, -H, 0, 0, -1, 0, outerDk, 0.1);
+      b._push(c0 * rB, -H, n0 * rB, 0, -1, 0, outerDk, 0.1);
+      b._push(c1 * rB, -H, n1 * rB, 0, -1, 0, outerDk, 0.1);
+      // water surface just under the rim (fan segment, facing up)
+      b._push(0, -0.22, 0, 0, 1, 0, water, 0.35);
+      b._push(c1 * rInT, -0.22, n1 * rInT, 0, 1, 0, water, 0.35);
+      b._push(c0 * rInT, -0.22, n0 * rInT, 0, 1, 0, water, 0.35);
+    }
+    // steel hub + short mast above the rim, where the cable attaches
+    b.cylinder(0x2c3138, { x: 0, y: 0.22, z: 0, r: 0.07, h: 0.5, seg: 8, emis: 0.1 });
+    b.cylinder(0x3a4048, { x: 0, y: 0.02, z: 0, r: 0.20, h: 0.08, seg: 10, emis: 0.1 });
+    return b.build(gl);
+  }
+  /* Falling water sheet, LOCAL space like buildShaft: ground contact
+     at y=0, top (bucket mouth) at y=1. Radius profile widens downward
+     (0.42 at the top -> 1.0 at the base, in units of the draw scale)
+     and per-segment streak factors break the surface into falling
+     ribbons so it reads as moving water, not a glass cone. Colours are
+     additive-blend values (black = invisible): pale blue-white,
+     brightest in the core pass. */
+  function buildStream(gl, core) {
+    var b = new Baker(), SEG = 18;
+    var tint = [0.62, 0.78, 1.0];
+    var rings = [0, 0.22, 0.45, 0.7, 0.88, 1.0];
+    function rad(t) { return (core ? 0.55 : 1.0) * (0.42 + 0.58 * Math.pow(1 - t, 1.15)); }
+    function bright(t) {
+      var base = core ? 0.34 : 0.20;
+      return base * (0.82 + 0.30 * (1 - t)); // slightly brighter as it spreads
+    }
+    for (var i = 0; i < rings.length - 1; i++) {
+      var t0 = rings[i], t1 = rings[i + 1];
+      for (var s = 0; s < SEG; s++) {
+        var a0 = (s / SEG) * Math.PI * 2, a1 = ((s + 1) / SEG) * Math.PI * 2;
+        // deterministic streaks: alternating ribbons of stronger water
+        var streak = 0.62 + 0.38 * (0.5 + 0.5 * Math.sin(s * 2.39 + i * 1.7));
+        var b0 = bright(t0) * streak, b1 = bright(t1) * streak;
+        var c0 = [tint[0] * b0, tint[1] * b0, tint[2] * b0];
+        var c1 = [tint[0] * b1, tint[1] * b1, tint[2] * b1];
+        var r0 = rad(t0), r1 = rad(t1);
+        var p00 = [Math.cos(a0) * r0, t0, Math.sin(a0) * r0], p01 = [Math.cos(a1) * r0, t0, Math.sin(a1) * r0];
+        var p11 = [Math.cos(a1) * r1, t1, Math.sin(a1) * r1], p10 = [Math.cos(a0) * r1, t1, Math.sin(a0) * r1];
+        var nx = Math.cos(a0), nz = Math.sin(a0);
+        b._push(p00[0], p00[1], p00[2], nx, 0, nz, c0, 0.92);
+        b._push(p01[0], p01[1], p01[2], nx, 0, nz, c0, 0.92);
+        b._push(p11[0], p11[1], p11[2], nx, 0, nz, c1, 0.92);
+        b._push(p00[0], p00[1], p00[2], nx, 0, nz, c0, 0.92);
+        b._push(p11[0], p11[1], p11[2], nx, 0, nz, c1, 0.92);
+        b._push(p10[0], p10[1], p10[2], nx, 0, nz, c1, 0.92);
+      }
+    }
+    return b.build(gl);
+  }
+  /* Splash disc, LOCAL space: unit-radius XZ disc with a radial
+     blue-white gradient falling to black at the rim (invisible under
+     additive blending) — same feathering trick as the searchlight
+     pool, but brighter and bluer. */
+  function buildSplash(gl) {
+    var b = new Baker(), SEG = 22;
+    var tint = [0.66, 0.82, 1.0];
+    var rings = [0, 0.28, 0.52, 0.76, 1.0];
+    var fall = [0.34, 0.26, 0.15, 0.06, 0.0];
+    function col(i) { return [tint[0] * fall[i], tint[1] * fall[i], tint[2] * fall[i]]; }
+    for (var i = 0; i < rings.length - 1; i++) {
+      for (var s = 0; s < SEG; s++) {
+        var a0 = (s / SEG) * Math.PI * 2, a1 = ((s + 1) / SEG) * Math.PI * 2;
+        var r0 = rings[i], r1 = rings[i + 1], c0 = col(i), c1 = col(i + 1);
+        var p00 = [Math.cos(a0) * r0, 0, Math.sin(a0) * r0], p01 = [Math.cos(a1) * r0, 0, Math.sin(a1) * r0];
+        var p11 = [Math.cos(a1) * r1, 0, Math.sin(a1) * r1], p10 = [Math.cos(a0) * r1, 0, Math.sin(a0) * r1];
+        if (i === 0) {
+          b._push(0, 0, 0, 0, 1, 0, c0, 0.92);
+          b._push(p10[0], 0, p10[2], 0, 1, 0, c1, 0.92);
+          b._push(p11[0], 0, p11[2], 0, 1, 0, c1, 0.92);
+        } else {
+          b._push(p00[0], 0, p00[2], 0, 1, 0, c0, 0.92);
+          b._push(p01[0], 0, p01[2], 0, 1, 0, c0, 0.92);
+          b._push(p11[0], 0, p11[2], 0, 1, 0, c1, 0.92);
+          b._push(p00[0], 0, p00[2], 0, 1, 0, c0, 0.92);
+          b._push(p11[0], 0, p11[2], 0, 1, 0, c1, 0.92);
+          b._push(p10[0], 0, p10[2], 0, 1, 0, c1, 0.92);
+        }
+      }
+    }
+    return b.build(gl);
+  }
+  /* Spray skirt, LOCAL space: a short cone of mist at the impact
+     point — unit height, radius 1.0 at the ground narrowing to 0.55
+     at the top, brightness fading upward to black. */
+  function buildSpray(gl) {
+    var b = new Baker(), SEG = 16;
+    var tint = [0.66, 0.82, 1.0];
+    var rings = [0, 0.5, 1.0], rads = [1.0, 0.78, 0.55], fall = [0.20, 0.09, 0.0];
+    for (var i = 0; i < rings.length - 1; i++) {
+      var t0 = rings[i], t1 = rings[i + 1];
+      var c0 = [tint[0] * fall[i], tint[1] * fall[i], tint[2] * fall[i]];
+      var c1 = [tint[0] * fall[i + 1], tint[1] * fall[i + 1], tint[2] * fall[i + 1]];
+      for (var s = 0; s < SEG; s++) {
+        var a0 = (s / SEG) * Math.PI * 2, a1 = ((s + 1) / SEG) * Math.PI * 2;
+        var p00 = [Math.cos(a0) * rads[i], t0, Math.sin(a0) * rads[i]], p01 = [Math.cos(a1) * rads[i], t0, Math.sin(a1) * rads[i]];
+        var p11 = [Math.cos(a1) * rads[i + 1], t1, Math.sin(a1) * rads[i + 1]], p10 = [Math.cos(a0) * rads[i + 1], t1, Math.sin(a0) * rads[i + 1]];
+        var nx = Math.cos(a0), nz = Math.sin(a0);
+        b._push(p00[0], p00[1], p00[2], nx, 0, nz, c0, 0.92);
+        b._push(p01[0], p01[1], p01[2], nx, 0, nz, c0, 0.92);
+        b._push(p11[0], p11[1], p11[2], nx, 0, nz, c1, 0.92);
+        b._push(p00[0], p00[1], p00[2], nx, 0, nz, c0, 0.92);
+        b._push(p11[0], p11[1], p11[2], nx, 0, nz, c1, 0.92);
+        b._push(p10[0], p10[1], p10[2], nx, 0, nz, c1, 0.92);
+      }
+    }
+    return b.build(gl);
+  }
+
   function ensureInit() {
     if (inited) return;
     inited = true;
@@ -83,17 +320,17 @@ var CoralPolice = (function () {
       units.push({ car: car, active: false, wander: Math.random() * 6.28 });
     }
     heliMesh = CoralBakers.heli(gl, 0xf2f4f6);
+    coneMesh = buildShaft(gl, 1.0, 0.05, 0.14);
+    coneCoreMesh = buildShaft(gl, 0.38, 0.09, 0.26);
+    poolMesh = buildPool(gl);
+    bucketMesh = buildBucket(gl);
     var cb = new Baker();
-    cb.cone(0x6b5a30, { x: 0, y: 0, z: 0, r: 6.5, h: 38, seg: 12, emis: 0.38 });
-    coneMesh = cb.build(gl);
-    /* Feathered light pool: three concentric warm discs at staggered
-       heights, drawn additively — bright core, soft falloff, no hard
-       sand-patch edge. */
-    var pb = new Baker();
-    pb.cylinder(0x9a7a3a, { x: 0, y: 0, z: 0, r: 5.6, h: 0.1, seg: 20, emis: 0.08 });
-    pb.cylinder(0xd9b96a, { x: 0, y: 0.07, z: 0, r: 3.6, h: 0.1, seg: 20, emis: 0.22 });
-    pb.cylinder(0xfff3cf, { x: 0, y: 0.14, z: 0, r: 2.3, h: 0.1, seg: 18, emis: 0.6 });
-    poolMesh = pb.build(gl);
+    cb.cylinder(0x23272e, { x: 0, y: 0, z: 0, r: 0.05, h: 1, seg: 6, emis: 0.05 });
+    cableMesh = cb.build(gl);
+    streamMesh = buildStream(gl, false);
+    streamCoreMesh = buildStream(gl, true);
+    splashMesh = buildSplash(gl);
+    sprayMesh = buildSpray(gl);
     var sb = new Baker();
     sb.plane(0x0a0c10, { x: 0, y: 0, z: 0, w: 11, d: 11, emis: 0 });
     shadowMesh = sb.build(gl);
@@ -147,6 +384,15 @@ var CoralPolice = (function () {
     floor = Math.max(0, Math.min(5, Math.round(n || 0)));
     if (stars < floor) setWanted(floor);
   }
+  /* E1 contract: setBucketMode(true) hangs the water bucket under
+     AIR ONE; setBucketMode(false) removes it completely. Purely a
+     presentation toggle — wanted, units and the searchlight are not
+     touched either way. */
+  function setBucketMode(on) {
+    bucketMode = !!on;
+    if (bucketMode && window.Coral3D && Coral3D.gl) ensureInit();
+  }
+
   function clear() {
     stars = 0; searching = false; visible = false; drainTimer = 0;
     bustTimer = 0; bustedFired = false; block = null;
@@ -172,6 +418,13 @@ var CoralPolice = (function () {
   function update(dt) {
     if (!window.Coral3D || !Coral3D.gl) return;
     ensureInit();
+    /* Bucket clock + water countdown. Gated on bucketMode so the
+       off path is untouched; `dropping` is ignored while off. */
+    if (bucketMode) {
+      bucketTime += dt;
+      if (droppingVal > 0) droppingVal = Math.max(0, droppingVal - dt);
+      if (!heliState.active) rotorAngle += dt * 30; // staged heli still spins up
+    }
     var p = playerPos();
     if (stars < floor) stars = floor;
 
@@ -298,19 +551,73 @@ var CoralPolice = (function () {
       CoralVehicles.draw(R, block.cars[1]);
       CoralPeople.draw(R, block.officer);
     }
-    if (heliState.active) {
+    if (heliState.active || bucketMode) {
       var gl = Coral3D.gl;
       // altitude shadow blob on the ground under the helicopter
       R.draw(shadowMesh, Mat4.compose(heliState.x, 0.07, heliState.z, 0, 0, 0), { noDepthWrite: true });
       var model = Mat4.compose(heliState.x, heliState.y, heliState.z, 0, heliState.heading, 0.10);
       R.draw(heliMesh.body, model);
       R.draw(heliMesh.rotor, Mat4.multiply(model, Mat4.compose(0, 1.16, 0.3, 0, rotorAngle, 0)));
-      // additive searchlight cone + ground pool, depth-write off
+      /* --- water bucket (bucket mode only; absent entirely when off) ---
+         Sway is a sum of two slow sines per axis (max ~0.75 m), so the
+         bucket lags and wanders gently under the airframe. The cable
+         and bucket share one tilt/azimuth aimed from the bucket rim
+         back up to the belly point, exactly like the searchlight
+         shaft aims from its ground target up to the lamp. */
+      var bSwayX = 0, bSwayZ = 0, bTopX = 0, bTopY = 0, bTopZ = 0;
+      if (bucketMode) {
+        bSwayX = Math.sin(bucketTime * 0.9) * 0.5 + Math.sin(bucketTime * 0.53 + 1.3) * 0.25;
+        bSwayZ = Math.cos(bucketTime * 0.77 + 0.6) * 0.5 + Math.cos(bucketTime * 0.41) * 0.25;
+        bTopX = heliState.x + bSwayX;
+        bTopZ = heliState.z + bSwayZ;
+        bTopY = heliState.y - 1.0 - BUCKET_CABLE;
+        var cdx = -bSwayX, cdz = -bSwayZ; // rim -> belly, like shaft apex offset
+        var cHoriz = Math.hypot(cdx, cdz), cLen = Math.hypot(cHoriz, BUCKET_CABLE);
+        var cTilt = Math.atan2(cHoriz, BUCKET_CABLE), cAzim = Math.atan2(-cdx, cdz);
+        R.draw(cableMesh, Mat4.compose(bTopX, bTopY, bTopZ, cTilt, cAzim, 0, 1, cLen, 1), { noCull: true });
+        R.draw(bucketMesh, Mat4.compose(bTopX, bTopY, bTopZ, cTilt, cAzim, 0), { noCull: true });
+      }
+      if (heliState.active) {
+      // Volumetric searchlight: shaft stretched from the ground target
+      // up to AIR ONE's actual position (plus the optional staging
+      // rake), so an offset helicopter produces a diagonal shaft, and
+      // a feathered radial pool where it lands. Additive, depth-write
+      // off, no culling (the shaft must read from inside and out).
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE);
-      R.draw(coneMesh, Mat4.compose(heliState.tx, 19, heliState.tz, 0, 0, 0), { noDepthWrite: true });
-      R.draw(poolMesh, Mat4.compose(heliState.tx, 0.1, heliState.tz, 0, 0, 0), { noDepthWrite: true });
+      var tx = heliState.tx, tz = heliState.tz;
+      var ax = heliState.x + searchlightCfg.rakeX, az = heliState.z + searchlightCfg.rakeZ;
+      var ay = Math.max(6, heliState.y - 1.2); // lamp hangs below the fuselage
+      var dx = ax - tx, dz = az - tz;
+      var horiz = Math.hypot(dx, dz), slant = Math.hypot(horiz, ay);
+      var tilt = Math.atan2(horiz, ay), azim = Math.atan2(-dx, dz);
+      var poolR = searchlightCfg.poolRadius;
+      R.draw(poolMesh, Mat4.compose(tx, 0.12, tz, 0, 0, 0, poolR, 1, poolR), { noDepthWrite: true, noCull: true });
+      var shaftModel = Mat4.compose(tx, 0.1, tz, tilt, azim, 0, poolR * 0.94, slant, poolR * 0.94);
+      R.draw(coneMesh, shaftModel, { noDepthWrite: true, noCull: true });
+      R.draw(coneCoreMesh, shaftModel, { noDepthWrite: true, noCull: true });
       gl.disable(gl.BLEND);
+      }
+      /* --- water drop (bucket mode + dropping > 0 only) ---
+         A falling sheet from the bucket floor to the ground: outer
+         streaked frustum (3.1 m wide at the base) plus a brighter
+         core, a feathered splash disc (~5.9 m across) and a short
+         spray skirt at the impact point. Additive like the
+         searchlight, so it glows against smoke and fire. */
+      if (bucketMode && droppingVal > 0) {
+        var botY = bTopY - BUCKET_H;
+        if (botY > 0.6) {
+          gl.enable(gl.BLEND);
+          gl.blendFunc(gl.ONE, gl.ONE);
+          var sR = 1.55; // stream radius at the ground (m)
+          R.draw(splashMesh, Mat4.compose(bTopX, 0.14, bTopZ, 0, 0, 0, sR * 1.9, 1, sR * 1.9), { noDepthWrite: true, noCull: true });
+          R.draw(sprayMesh, Mat4.compose(bTopX, 0.1, bTopZ, 0, 0, 0, sR * 1.15, 0.95, sR * 1.15), { noDepthWrite: true, noCull: true });
+          var streamModel = Mat4.compose(bTopX, 0.1, bTopZ, 0, 0, 0, sR, botY - 0.1, sR);
+          R.draw(streamMesh, streamModel, { noDepthWrite: true, noCull: true });
+          R.draw(streamCoreMesh, streamModel, { noDepthWrite: true, noCull: true });
+          gl.disable(gl.BLEND);
+        }
+      }
     }
   }
 
@@ -320,7 +627,14 @@ var CoralPolice = (function () {
   Object.defineProperty(api, 'heliActive', { get: function () { return heliState.active; } });
   Object.defineProperty(api, 'blockCars', { get: function () { return block ? block.cars : []; } });
   api.heliState = heliState;
+  api.searchlight = searchlightCfg; // staging hook: {rakeX, rakeZ, poolRadius} — see declaration
   api.units = units;
+  Object.defineProperty(api, 'bucketMode', { get: function () { return bucketMode; } });
+  Object.defineProperty(api, 'dropping', {
+    get: function () { return droppingVal; },
+    set: function (v) { droppingVal = Math.max(0, +v || 0); }
+  });
+  api.setBucketMode = setBucketMode;
   api.reportCrime = reportCrime;
   api.setWanted = setWanted;
   api.setFloor = setFloor;
