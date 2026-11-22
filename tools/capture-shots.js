@@ -366,7 +366,7 @@ server.listen(0, '127.0.0.1', async () => {
         const a=Math.atan2(rb.y-c.y, rb.x-c.x);
         g.combat.fire(c.x, c.y, a, 'player');
         const h=g.police.heli;
-        if (h) { h.x=c.x-80; h.y=c.y-95; h.spotX=c.x; h.spotY=c.y; h.angle=Math.atan2(c.y-h.y, c.x-h.x); }
+        if (h) { h.x=c.x-45; h.y=c.y-55; h.spotX=c.x; h.spotY=c.y; h.angle=Math.atan2(c.y-h.y, c.x-h.x); }
         CoralShots.freeze(true); return true; })()`);
       await delay(300);
       const d = await evaluate('CoralShots.describe()');
