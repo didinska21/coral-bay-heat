@@ -68,6 +68,8 @@
   }
 
   /* ------------------------------------------------------------- state */
+  var gameState = SMOKE ? 'play' : 'title'; // boot into the title screen
+  var titleAngle = Math.PI; // orbit starts on the sea side: car framed against the beach
   var timeHours = SMOKE ? 17.55 : 16.9;
   CoralCity.setHour(timeHours);
   var heliAngle = 0, rotorAngle = 0;
@@ -81,7 +83,7 @@
   window.addEventListener('keydown', function (e) {
     keys[e.code] = true;
     if (e.code === 'Space' || e.code.indexOf('Arrow') === 0) e.preventDefault();
-    if (e.code === 'KeyF' && !e.repeat && !SMOKE) toggleEnterExit();
+    if (e.code === 'KeyF' && !e.repeat && !SMOKE && gameState !== 'title') toggleEnterExit();
   });
   window.addEventListener('keyup', function (e) { keys[e.code] = false; });
   function keyDown() {
@@ -145,8 +147,9 @@
     rotorAngle += dt * 28;
 
     var focus = focusEntity();
+    var titleMode = gameState === 'title'; // world ambient, player input locked
     if (mode === 'car') {
-      var input = {
+      var input = titleMode ? { throttle: 0, steer: 0, handbrake: false } : {
         throttle: (keyDown('KeyW', 'ArrowUp') ? 1 : 0) - (keyDown('KeyS', 'ArrowDown') ? 1 : 0),
         steer: (keyDown('KeyA', 'ArrowLeft') ? 1 : 0) - (keyDown('KeyD', 'ArrowRight') ? 1 : 0),
         handbrake: !!keys['Space']
@@ -178,7 +181,7 @@
         }
       }
     } else {
-      CoralPeople.updatePlayer(mara, {
+      CoralPeople.updatePlayer(mara, titleMode ? { f: false, b: false, l: false, r: false, run: false } : {
         f: keyDown('KeyW', 'ArrowUp'), b: keyDown('KeyS', 'ArrowDown'),
         l: keyDown('KeyA', 'ArrowLeft'), r: keyDown('KeyD', 'ArrowRight'),
         run: !!(keys['ShiftLeft'] || keys['ShiftRight'])
@@ -207,6 +210,15 @@
     camPos[2] += (tz - camPos[2]) * k;
     snapCam = false;
     camLook = [f.x + fx * (mode === 'car' ? 9 : 3.5), lookY, f.z + fz * (mode === 'car' ? 9 : 3.5)];
+    if (titleMode) { // slow orbit around the player car on the Marina
+      // boulevard — kept tight so the title view costs the same as the
+      // gameplay view (a wide cross-city view tanks SwiftShader fps)
+      titleAngle += dt * 0.07;
+      camPos[0] = f.x + Math.cos(titleAngle) * 13;
+      camPos[1] = 5.5;
+      camPos[2] = f.z + Math.sin(titleAngle) * 13;
+      camLook = [f.x, 1.6, f.z];
+    }
   }
   var camLook = [playerCar.x, 1.7, playerCar.z - 9];
 
@@ -314,7 +326,6 @@
 
   /* --------------------------------------------------------- public API */
   var Coral3D = {
-    state: 'play',
     input: keys,
     onCrime: null,
     gl: gl,
@@ -323,6 +334,7 @@
     crowd: crowd,
     allCars: allCars,
     teleport: function (x, z) {
+      if (gameState === 'title') gameState = 'play'; // programmatic start dismisses the title
       var B = CoralCity.bounds;
       x = Math.max(B.minX + 2, Math.min(B.maxX - 2, x));
       z = Math.max(B.minZ + 2, Math.min(B.maxZ - 2, z));
@@ -334,7 +346,10 @@
     },
     setTime: function (h) { timeHours = h; CoralCity.setHour(h); },
     setWanted: function (n) { if (window.CoralPolice) CoralPolice.setWanted(n); },
-    startMission: function (i) { return window.CoralMissions ? CoralMissions.start(i) : false; },
+    startMission: function (i) {
+      if (gameState === 'title') { gameState = 'play'; snapCam = true; } // programmatic start dismisses the title
+      return window.CoralMissions ? CoralMissions.start(i) : false;
+    },
     objective: function () { return window.CoralMissions ? CoralMissions.objective() : null; },
     startGame: function () { Coral3D.state = 'play'; },
     reset: function () {
@@ -366,6 +381,20 @@
       };
     }
   };
+  /* State semantics (bible main3d): 'play' from title/pause resumes
+     WITHOUT reset; from busted/wasted it RESETS (police cleared, health
+     restored, wanted 0). Pause freezes the sim in the loop above. */
+  Object.defineProperty(Coral3D, 'state', {
+    get: function () { return gameState; },
+    set: function (v) {
+      if (v === 'play' && gameState === 'title') snapCam = true; // land behind the car at once
+      if (v === 'play' && (gameState === 'busted' || gameState === 'wasted')) {
+        if (window.CoralPolice) CoralPolice.clear();
+        if (window.CoralCombat) CoralCombat.reset();
+      }
+      gameState = v;
+    }
+  });
   Object.defineProperty(Coral3D, 'player', {
     get: function () {
       var f = focusEntity();

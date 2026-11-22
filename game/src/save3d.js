@@ -1,54 +1,74 @@
-/* Save game, 3D (F4-S3). localStorage key 'coralbay3d-save-v1':
-   { money, respect, completedCount } — the durable slice of
-   CoralMissions. Written on mission complete (completedCount watch,
-   500 ms poll) and every 10 s while the page lives. Loaded at boot
-   into CoralMissions via its restore() hook, before main3d starts
-   the title screen, so CONTINUE can show the saved numbers.
+/* save3d.js — localStorage save for Coral Bay Heat 3D (session F4R-S4).
+   Key "coralbay3d-save-v1": { money, respect, completedCount }.
+   Loaded at boot into CoralMissions.restore(); written on mission
+   completion and every ~10 s while a run is in progress.
+   Exported: window.CoralSave = { load, clear, read, write, hasSave } */
+'use strict';
 
-   API: window.CoralSave = { load(), clear(), read(), write() } */
-var CoralSave = (function () {
+(function () {
   var KEY = 'coralbay3d-save-v1';
 
   function read() {
     try {
       var raw = localStorage.getItem(KEY);
-      return raw ? JSON.parse(raw) : null;
+      if (!raw) return null;
+      var o = JSON.parse(raw);
+      if (!o || typeof o !== 'object') return null;
+      return {
+        money: typeof o.money === 'number' ? o.money : 0,
+        respect: typeof o.respect === 'number' ? o.respect : 0,
+        completedCount: typeof o.completedCount === 'number' ? o.completedCount : 0
+      };
     } catch (e) { return null; }
   }
-  function hasSave() {
-    var s = read();
-    return !!(s && (s.completedCount > 0 || s.money > 0 || s.respect > 0));
-  }
-  function write() {
-    if (!window.CoralMissions) return;
-    try {
-      localStorage.setItem(KEY, JSON.stringify({
+
+  function hasSave() { return read() !== null; }
+
+  function write(data) {
+    if (!data && window.CoralMissions) {
+      data = {
         money: CoralMissions.money,
         respect: CoralMissions.respect,
         completedCount: CoralMissions.completedCount
+      };
+    }
+    if (!data) return false;
+    try {
+      localStorage.setItem(KEY, JSON.stringify({
+        money: data.money || 0,
+        respect: data.respect || 0,
+        completedCount: data.completedCount || 0
       }));
-    } catch (e) { /* storage unavailable — play on unsaved */ }
+      return true;
+    } catch (e) { return false; }
   }
+
   function load() {
     var s = read();
-    if (s && window.CoralMissions && CoralMissions.restore) CoralMissions.restore(s);
+    if (s && window.CoralMissions) CoralMissions.restore(s);
     return s;
   }
+
   function clear() {
-    try { localStorage.removeItem(KEY); } catch (e) { /* ignore */ }
+    try { localStorage.removeItem(KEY); } catch (e) { /* storage unavailable */ }
   }
 
-  load();
+  window.CoralSave = { load: load, clear: clear, read: read, write: write, hasSave: hasSave };
+
+  load(); // boot: apply any saved progress to the mission chain
+
+  /* Persist: immediately when a mission completes, plus every ~10 s. */
   var lastCompleted = window.CoralMissions ? CoralMissions.completedCount : 0;
+  var ticks = 0;
   setInterval(function () {
     if (!window.CoralMissions) return;
+    ticks++;
     if (CoralMissions.completedCount !== lastCompleted) {
       lastCompleted = CoralMissions.completedCount;
-      write(); // mission complete -> persist immediately
+      write();
+    } else if (ticks >= 10) {
+      ticks = 0;
+      write();
     }
-  }, 500);
-  setInterval(write, 10000);
-
-  return { load: load, clear: clear, read: read, write: write, hasSave: hasSave };
+  }, 1000);
 }());
-window.CoralSave = CoralSave;
