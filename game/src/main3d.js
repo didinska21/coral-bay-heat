@@ -1,14 +1,21 @@
-/* main3d.js (LEAN, session F4R-S1) — boot + render loop for the 3D build.
-   A self-driving demo car loops the Marina/boulevard block under a smoothed
-   chase camera, the S0-style helicopter circles overhead, and the 10-minute
-   day cycle ticks. Later sessions extend this file with player control,
-   traffic, police, missions and HUD wiring.
+/* main3d.js — boot + render loop + player wiring for the 3D build.
+   Session F4R-S2: real player control on top of the R1 engine/city.
+   The player spawns in the sport car at CoralCity.spawnPoints.playerCar,
+   drives with arcade physics (vehicles3d), steps out with F and walks as
+   Mara (people3d), while graph traffic (traffic3d) and a sidewalk crowd
+   fill the city. The ambient helicopter from R1 still circles, and the
+   10-minute day cycle ticks.
 
-   Staging skeleton exposed here:
-     window.Coral3D = { player (getter), teleport(x,z), setTime(h), stats(),
-                        input }
-     ?shot=smoke freezes a composed golden-hour frame and publishes
-     window.__smokeStats + window.__smokeReady.
+   Public API (window.Coral3D):
+     player   — live getter {pos, mode ('car'|'foot'), heading}
+     teleport(x, z) — FREE placement of the active entity (car or Mara)
+     setTime(h), stats(), input (live key-state object), state
+     onCrime  — assignable hook fn(kind, data); main reports 'shunt'
+                (impact > ~5 m/s) and 'hitandrun' here (police session
+                wires its wanted system to it)
+     vehicleInstance / mara / traffic / crowd / allCars — live handles
+   ?shot=smoke freezes a composed golden-hour frame and publishes
+   window.__smokeStats + window.__smokeReady.
 */
 'use strict';
 
@@ -29,71 +36,182 @@
   var gl = R.gl;
   CoralCity.build(gl);
 
-  /* ------------------------------------------------ demo car on its loop */
-  // Closed loop around one Marina block: avenues x=375/525, streets z=+-125,
-  // offset into the right-hand lane of each leg.
-  var LOOP = [
-    { x: 378, z: -122 }, { x: 378, z: 122 },
-    { x: 522, z: 128 }, { x: 522, z: -122 }
-  ];
-  var loopSegs = [], loopLen = 0;
-  for (var li = 0; li < LOOP.length; li++) {
-    var a = LOOP[li], b = LOOP[(li + 1) % LOOP.length];
-    var len = Math.hypot(b.x - a.x, b.z - a.z);
-    loopSegs.push({ a: a, b: b, len: len, start: loopLen });
-    loopLen += len;
-  }
-  function loopPoint(s) {
-    s = ((s % loopLen) + loopLen) % loopLen;
-    for (var i = 0; i < loopSegs.length; i++) {
-      var sg = loopSegs[i];
-      if (s <= sg.start + sg.len || i === loopSegs.length - 1) {
-        var t = Math.min(1, Math.max(0, (s - sg.start) / sg.len));
-        return { x: sg.a.x + (sg.b.x - sg.a.x) * t, z: sg.a.z + (sg.b.z - sg.a.z) * t };
-      }
-    }
-    return { x: LOOP[0].x, z: LOOP[0].z };
-  }
-  function nearestLoopS(x, z) {
-    var best = 0, bd = Infinity;
-    for (var s = 0; s < loopLen; s += 2) {
-      var p = loopPoint(s), d = (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z);
-      if (d < bd) { bd = d; best = s; }
-    }
-    return best;
-  }
-  function angleLerp(a, b, t) {
-    var d = ((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-    return a + d * t;
-  }
+  /* ------------------------------------------------------------ entities */
+  var spawn = CoralCity.spawnPoints.playerCar;
+  var playerCar = CoralVehicles.create(gl, 'sport', 0xff5847, spawn.x, spawn.z, spawn.heading);
 
-  var carMesh = CoralBakers.car(gl, 'sport', 0xff5847);
+  // Parked cars: vehicle instances over the city's static parked list.
+  // The city draws them statically until one is first driven; then its
+  // entry leaves CoralCity.spawnPoints.parkedCars and this module draws
+  // (and moves) the instance instead.
+  var parkedInstances = [];
+  CoralCity.spawnPoints.parkedCars.forEach(function (entry) {
+    var inst = CoralVehicles.create(gl, entry.variant, entry.color, entry.x, entry.z, entry.heading);
+    inst.parkedEntry = entry;
+    inst.activated = false;
+    parkedInstances.push(inst);
+  });
+  var allCars = [playerCar].concat(parkedInstances);
+
+  var mara = CoralPeople.createPlayer(gl, spawn.x + 3, spawn.z, spawn.heading);
+  var traffic = CoralTraffic.create(gl, 12);
+  var crowd = CoralPeople.createCrowd(gl, 24);
   var heli = CoralBakers.heli(gl, 0xe8ecf0);
-  var car = { s: 0, x: LOOP[0].x, z: LOOP[0].z, heading: Math.PI, speed: 11 };
-  car.s = nearestLoopS(522, 40); // start on the boulevard leg
-  var p0 = loopPoint(car.s); car.x = p0.x; car.z = p0.z;
+
+  var mode = 'car';                    // 'car' | 'foot'
+  var currentCar = playerCar;
+  var drivenIds = {}; drivenIds[playerCar.id] = true;
+  var carsDriven = 1;
+
+  if (SMOKE) { // composed frame: player car mid-boulevard, heli in frame
+    playerCar.x = 522; playerCar.z = 6; playerCar.heading = 0; playerCar.speed = 0;
+  }
 
   /* ------------------------------------------------------------- state */
   var timeHours = SMOKE ? 17.55 : 16.9;
   CoralCity.setHour(timeHours);
   var heliAngle = 0, rotorAngle = 0;
-  var camPos = [car.x + 8, 5, car.z + 13];
   var fps = 0, frames = 0, fpsClock = 0, lastDraws = 0, lastTris = 0;
-  var keys = {};
-  window.addEventListener('keydown', function (e) { keys[e.code] = true; });
-  window.addEventListener('keyup', function (e) { keys[e.code] = false; });
+  var snapCam = true;
+  var camYaw = spawn.heading;
+  var camPos = [playerCar.x + 8, 5, playerCar.z + 13];
 
-  if (SMOKE) { // composed frozen frame: car mid-boulevard, heli in frame
-    car.s = nearestLoopS(522, 6);
-    var sp = loopPoint(car.s); car.x = sp.x; car.z = sp.z; car.heading = 0; car.speed = 0;
-    heliAngle = Math.atan2((car.x - 34) - 430, (car.z - 78)); // not used in smoke; heli placed explicitly below
+  /* ------------------------------------------------------------- input */
+  var keys = {};
+  window.addEventListener('keydown', function (e) {
+    keys[e.code] = true;
+    if (e.code === 'Space' || e.code.indexOf('Arrow') === 0) e.preventDefault();
+    if (e.code === 'KeyF' && !e.repeat && !SMOKE) toggleEnterExit();
+  });
+  window.addEventListener('keyup', function (e) { keys[e.code] = false; });
+  function keyDown() {
+    for (var i = 0; i < arguments.length; i++) if (keys[arguments[i]]) return true;
+    return false;
   }
 
+  function focusEntity() { return mode === 'car' ? currentCar : mara; }
+
+  function toggleEnterExit() {
+    if (mode === 'car') {
+      // step out on the car's right side
+      var rx = Math.cos(currentCar.heading), rz = -Math.sin(currentCar.heading);
+      mara.x = currentCar.x + rx * 2.3;
+      mara.z = currentCar.z + rz * 2.3;
+      mara.heading = currentCar.heading;
+      mara.speed = 0; mara.down = false;
+      CoralPeople.collidePerson(mara);
+      currentCar.speed = 0;
+      mode = 'foot';
+      camYaw = mara.heading;
+      snapCam = true;
+    } else {
+      var best = null, bd = 4.5 * 4.5;
+      for (var i = 0; i < allCars.length; i++) {
+        var c = allCars[i];
+        var d = (c.x - mara.x) * (c.x - mara.x) + (c.z - mara.z) * (c.z - mara.z);
+        if (d < bd) { bd = d; best = c; }
+      }
+      if (!best) return;
+      if (!best.activated && best.parkedEntry) { // take over from the static city draw
+        var list = CoralCity.spawnPoints.parkedCars;
+        var idx = list.indexOf(best.parkedEntry);
+        if (idx >= 0) list.splice(idx, 1);
+        best.activated = true;
+      }
+      currentCar = best;
+      mode = 'car';
+      if (!drivenIds[best.id]) { drivenIds[best.id] = true; carsDriven++; }
+      snapCam = true;
+    }
+  }
+
+  /* Crime hook: forwarded to Coral3D.onCrime when the police session
+     assigns it (also to CoralPolice.reportCrime if present). */
+  function reportCrime(kind, data) {
+    if (Coral3D.onCrime) Coral3D.onCrime(kind, data);
+    else if (window.CoralPolice && CoralPolice.reportCrime) CoralPolice.reportCrime(kind, data);
+  }
+
+  /* ------------------------------------------------------------ update */
+  function angleLerp(a, b, t) {
+    var d = ((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+    return a + d * t;
+  }
+
+  function update(dt) {
+    timeHours = (timeHours + dt * 24 / CoralCity.DAY_LENGTH_SEC) % 24;
+    CoralCity.setHour(timeHours);
+    heliAngle += dt * 0.14;
+    rotorAngle += dt * 28;
+
+    var focus = focusEntity();
+    if (mode === 'car') {
+      var input = {
+        throttle: (keyDown('KeyW', 'ArrowUp') ? 1 : 0) - (keyDown('KeyS', 'ArrowDown') ? 1 : 0),
+        steer: (keyDown('KeyA', 'ArrowLeft') ? 1 : 0) - (keyDown('KeyD', 'ArrowRight') ? 1 : 0),
+        handbrake: !!keys['Space']
+      };
+      CoralVehicles.update(currentCar, input, dt);
+      var bImpact = CoralVehicles.collideBuildings(currentCar);
+      if (bImpact > 5) reportCrime('shunt', { impact: bImpact, x: currentCar.x, z: currentCar.z });
+      var i, other;
+      for (i = 0; i < traffic.cars.length; i++) {
+        var imp = CoralVehicles.collidePair(currentCar, traffic.cars[i]);
+        if (imp > 5) reportCrime('shunt', { impact: imp, x: currentCar.x, z: currentCar.z });
+      }
+      for (i = 0; i < allCars.length; i++) {
+        other = allCars[i];
+        if (other === currentCar) continue; // parked cars are static bodies, still solid
+        var imp2 = CoralVehicles.collidePair(currentCar, other);
+        if (imp2 > 5) reportCrime('shunt', { impact: imp2, x: currentCar.x, z: currentCar.z });
+      }
+      // running a pedestrian down
+      if (Math.abs(currentCar.speed) > 2) {
+        for (i = 0; i < crowd.peds.length; i++) {
+          var p = crowd.peds[i];
+          if (p.down) continue;
+          var dx = p.x - currentCar.x, dz = p.z - currentCar.z;
+          if (dx * dx + dz * dz < 2.0 * 2.0) {
+            p.down = true; p.downTime = 0;
+            reportCrime('hitandrun', { x: p.x, z: p.z });
+          }
+        }
+      }
+    } else {
+      CoralPeople.updatePlayer(mara, {
+        f: keyDown('KeyW', 'ArrowUp'), b: keyDown('KeyS', 'ArrowDown'),
+        l: keyDown('KeyA', 'ArrowLeft'), r: keyDown('KeyD', 'ArrowRight'),
+        run: !!(keys['ShiftLeft'] || keys['ShiftRight'])
+      }, dt, camYaw);
+      camYaw = angleLerp(camYaw, mara.heading, 1 - Math.exp(-dt * 5.5));
+    }
+
+    CoralTraffic.update(traffic, dt, focus);
+    CoralPeople.updateCrowd(crowd, dt, focus.x, focus.z);
+
+    /* camera */
+    var f = focusEntity();
+    var fx = -Math.sin(mode === 'car' ? f.heading : camYaw), fz = -Math.cos(mode === 'car' ? f.heading : camYaw);
+    var dist, height, lookY;
+    if (mode === 'car') {
+      var spd = Math.abs(f.speed);
+      dist = 10.5 + spd * 0.16; height = 4.9 + spd * 0.045; lookY = 1.7;
+    } else { dist = 6.5; height = 2.8; lookY = 1.45; }
+    var tx = f.x - fx * dist, tz = f.z - fz * dist;
+    var k = snapCam ? 1 : 1 - Math.exp(-dt * 3.6);
+    camPos[0] += (tx - camPos[0]) * k;
+    camPos[1] += (height - camPos[1]) * k;
+    camPos[2] += (tz - camPos[2]) * k;
+    snapCam = false;
+    camLook = [f.x + fx * (mode === 'car' ? 9 : 3.5), lookY, f.z + fz * (mode === 'car' ? 9 : 3.5)];
+  }
+  var camLook = [playerCar.x, 1.7, playerCar.z - 9];
+
+  /* ------------------------------------------------------------ render */
   function heliPose(t) {
-    if (SMOKE) return { x: car.x + 30, y: 24, z: car.z - 68, heading: 2.4 };
+    if (SMOKE) return { x: playerCar.x + 30, y: 24, z: playerCar.z - 68, heading: 2.4 };
     var cx = 430, cz = 0, rad = 135;
     var x = cx + Math.cos(heliAngle) * rad, z = cz + Math.sin(heliAngle) * rad;
-    // tangent heading for circular flight (forward = -sin h, -cos h)
     var vx = -Math.sin(heliAngle), vz = Math.cos(heliAngle);
     return { x: x, y: 56 + Math.sin(t * 0.7) * 3, z: z, heading: Math.atan2(-vx, -vz) };
   }
@@ -108,21 +226,26 @@
     var proj = Mat4.perspective(1.05, canvas.width / canvas.height, 0.5, 720);
     var cam, look;
     if (SMOKE) {
-      cam = [car.x - 10.5, 4.6, car.z + 14.5];
-      look = [car.x + 18, 1.8, car.z - 30];
-    } else {
-      var fx = -Math.sin(car.heading), fz = -Math.cos(car.heading);
-      var dx = car.x - fx * 11.5 + 1.2, dy = 5.4, dz = car.z - fz * 11.5;
-      var k = 1; // first frame snaps; update loop lerps afterwards
-      camPos[0] += (dx - camPos[0]) * k; camPos[1] += (dy - camPos[1]) * k; camPos[2] += (dz - camPos[2]) * k;
-      cam = camPos; look = [car.x + fx * 9, 1.7, car.z + fz * 9];
-    }
+      cam = [playerCar.x - 10.5, 4.6, playerCar.z + 14.5];
+      look = [playerCar.x + 18, 1.8, playerCar.z - 30];
+    } else { cam = camPos; look = camLook; }
     var view = Mat4.lookAt(cam, look, [0, 1, 0]);
     var vp = Mat4.multiply(proj, view);
 
     R.beginFrame(vp, day.clear);
     CoralCity.draw(R, vp, cam[0], cam[2], now / 1000);
-    R.draw(carMesh, Mat4.compose(car.x, 0, car.z, 0, car.heading, 0));
+    // world cars: the player's sport car always; parked instances once driven
+    var i;
+    for (i = 0; i < allCars.length; i++) {
+      var c = allCars[i];
+      if (c !== playerCar && !c.activated) continue; // city draws it statically
+      var dx = c.x - cam[0], dz = c.z - cam[2];
+      if (dx * dx + dz * dz > 420 * 420) continue;
+      CoralVehicles.draw(R, c);
+    }
+    CoralTraffic.draw(R, traffic, cam[0], cam[2]);
+    CoralPeople.drawCrowd(R, crowd, cam[0], cam[2]);
+    if (mode === 'foot' && !SMOKE) CoralPeople.draw(R, mara);
     var hp = heliPose(now / 1000);
     var heliModel = Mat4.compose(hp.x, hp.y, hp.z, 0, hp.heading, 0.10);
     R.draw(heli.body, heliModel);
@@ -165,30 +288,15 @@
   var last = performance.now();
   function frame(nowMs) {
     requestAnimationFrame(frame);
-    var dt = Math.min(0.05, (nowMs - last) / 1000); last = nowMs;
-    frames++; fpsClock += dt;
+    var rawDt = (nowMs - last) / 1000; last = nowMs;
+    var dt = Math.min(0.25, rawDt);
+    frames++; fpsClock += rawDt;
     if (fpsClock >= 0.5) { fps = Math.round(frames / fpsClock * 10) / 10; frames = 0; fpsClock = 0; }
 
-    if (!SMOKE) {
-      timeHours = (timeHours + dt * 24 / CoralCity.DAY_LENGTH_SEC) % 24;
-      CoralCity.setHour(timeHours);
-      car.s += car.speed * dt;
-      var p = loopPoint(car.s), ahead = loopPoint(car.s + 8);
-      car.x = p.x; car.z = p.z;
-      var targetHeading = Math.atan2(-(ahead.x - p.x), -(ahead.z - p.z));
-      car.heading = angleLerp(car.heading, targetHeading, 1 - Math.exp(-dt * 3.2));
-      heliAngle += dt * 0.14;
-      rotorAngle += dt * 28;
-      // smoothed chase camera follow-through
-      var fx = -Math.sin(car.heading), fz = -Math.cos(car.heading);
-      var cdx = car.x - fx * 11.5, cdz = car.z - fz * 11.5;
-      var ck = 1 - Math.exp(-dt * 3.4);
-      camPos[0] += (cdx - camPos[0]) * ck;
-      camPos[1] += (5.4 - camPos[1]) * ck;
-      camPos[2] += (cdz - camPos[2]) * ck;
-    } else {
-      rotorAngle = 2.4;
-    }
+    if (!SMOKE) { // substep so slow frames still simulate in real time
+      var steps = Math.max(1, Math.ceil(dt / 0.05)), sdt = dt / steps;
+      for (var si = 0; si < steps; si++) update(sdt);
+    } else rotorAngle = 2.4;
     renderFrame(nowMs);
     if (SMOKE && !window.__smokeReady) {
       smokeFrames++;
@@ -201,28 +309,49 @@
   var Coral3D = {
     state: 'play',
     input: keys,
+    onCrime: null,
+    gl: gl,
+    renderer: R,
+    traffic: traffic,
+    crowd: crowd,
+    allCars: allCars,
     teleport: function (x, z) {
-      car.s = nearestLoopS(x, z);
-      var p = loopPoint(car.s); car.x = p.x; car.z = p.z;
-      camPos = [car.x + 8, 5.4, car.z + 13];
+      var B = CoralCity.bounds;
+      x = Math.max(B.minX + 2, Math.min(B.maxX - 2, x));
+      z = Math.max(B.minZ + 2, Math.min(B.maxZ - 2, z));
+      var f = focusEntity();
+      f.x = x; f.z = z;
+      if (mode === 'car') { currentCar.speed = 0; CoralVehicles.collideBuildings(currentCar); }
+      else CoralPeople.collidePerson(mara);
+      snapCam = true;
     },
     setTime: function (h) { timeHours = h; CoralCity.setHour(h); },
     stats: function () {
+      var f = focusEntity();
       return {
-        fps: fps, mode: 'car', x: Math.round(car.x * 10) / 10, z: Math.round(car.z * 10) / 10,
-        speed: SMOKE ? 0 : car.speed, timeHours: Math.round(timeHours * 100) / 100,
-        traffic: 0, peds: 0, draws: lastDraws, tris: lastTris,
-        district: CoralCity.districtAt(car.x).id, state: 'play',
+        fps: fps, mode: mode,
+        x: Math.round(f.x * 10) / 10, z: Math.round(f.z * 10) / 10,
+        speed: SMOKE ? 0 : Math.round((mode === 'car' ? f.speed : f.speed) * 10) / 10,
+        timeHours: Math.round(timeHours * 100) / 100,
+        traffic: traffic.cars.length, peds: crowd.peds.length,
+        draws: lastDraws, tris: lastTris,
+        district: CoralCity.districtAt(f.x).id, state: Coral3D.state,
         wanted: 0, police: 0, heli: 1, searching: false,
         mission: 0, missionState: 'none', money: 0, respect: 0,
-        health: 100, vehicle: 'sport', carsDriven: 1
+        health: 100, vehicle: mode === 'car' ? currentCar.variant : null,
+        carsDriven: carsDriven
       };
     }
   };
   Object.defineProperty(Coral3D, 'player', {
     get: function () {
-      return { pos: { x: car.x, y: 0, z: car.z }, mode: 'car', heading: car.heading };
+      var f = focusEntity();
+      return { pos: { x: f.x, y: 0, z: f.z }, mode: mode, heading: f.heading };
     }
   });
+  Object.defineProperty(Coral3D, 'vehicleInstance', {
+    get: function () { return mode === 'car' ? currentCar : null; }
+  });
+  Object.defineProperty(Coral3D, 'mara', { get: function () { return mara; } });
   window.Coral3D = Coral3D;
 }());
