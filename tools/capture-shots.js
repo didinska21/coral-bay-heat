@@ -353,11 +353,20 @@ server.listen(0, '127.0.0.1', async () => {
         return true; })()`);
       await evaluate(`CoralShots.stage('3-chase'); true`);
       await delay(200);
+      // AIR ONE must be in this frame: at 5 stars the heli should already
+      // be up (the M-chain heat spawns it); if it is not, step the police
+      // until it joins, before anything is frozen.
+      await evaluate(`(() => { const g=CoralGame; let guard=0; while (!g.police.heli && guard++ < 200) stepPolice(0.05); return !!g.police.heli; })()`);
       // Drive-by muzzle flash + freeze in one evaluate so the 0.12 s flash
-      // is still on screen when the frame is captured.
+      // is still on screen when the frame is captured. The heli is placed
+      // in this same evaluate, after the last police update, so its AI
+      // cannot re-orbit it out of the frame before the freeze: up-left of
+      // the player car, spotlight pooled on the car, nose toward it.
       await evaluate(`(() => { const g=CoralGame, rb=g.police.roadblock, c=g.vehicles.playerCar;
         const a=Math.atan2(rb.y-c.y, rb.x-c.x);
         g.combat.fire(c.x, c.y, a, 'player');
+        const h=g.police.heli;
+        if (h) { h.x=c.x-80; h.y=c.y-95; h.spotX=c.x; h.spotY=c.y; h.angle=Math.atan2(c.y-h.y, c.x-h.x); }
         CoralShots.freeze(true); return true; })()`);
       await delay(300);
       const d = await evaluate('CoralShots.describe()');
@@ -365,6 +374,7 @@ server.listen(0, '127.0.0.1', async () => {
       check('shot3InCar', d.inCar === 'sport');
       check('shot3Stars5b', d.stars === 5);
       check('shot3Roadblock', d.roadblock === true);
+      check('shot3Heli', d.heli === true);
       check('shot3Night', d.day >= 0.99);
       check('shot3CarHurt', d.carHealth !== null && d.carHealth <= 40);
       check('shot3Health35', d.health === 35);
