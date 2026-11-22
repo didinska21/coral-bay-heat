@@ -214,6 +214,11 @@ server.listen(0, '127.0.0.1', async () => {
         const ais=g.vehicles.cars.filter(x=>x.ai).slice(0,3);
         const offs=[[-35,-45],[30,-60],[-5,-75]];
         ais.forEach(function (a, i) { a.x=p.x+offs[i][0]; a.y=p.y+offs[i][1]; a.angle=-Math.PI/2; a.speed=0; a.target=null; });
+        // One more civilian car crossing the horizontal road at the top
+        // of the frame, so the junction reads alive.
+        const cross=g.vehicles.cars.find(x=>x.ai && ais.indexOf(x)<0);
+        if (cross) { const ry=g.world.roadsY.reduce((a,b)=>Math.abs(b-p.y)<Math.abs(a-p.y)?b:a);
+          cross.x=p.x-105; cross.y=ry; cross.angle=0; cross.speed=0; cross.target=null; }
         // Repair the sport and drop every effect that is not a skid mark.
         c.health=c.maxHealth; c.smoke=0; c.fire=false;
         const eff=g.vehicles.effects();
@@ -221,7 +226,7 @@ server.listen(0, '127.0.0.1', async () => {
         g.combat.effects.length=0;
         g.state.player.health=80;
         CoralShots.stage('1-cover');
-        CoralShots.crowd(p.x, p.y, 8);
+        CoralShots.crowd(p.x, p.y, 14);
         CoralShots.freeze(true);
         return true; })()`);
       await delay(300);
@@ -263,6 +268,13 @@ server.listen(0, '127.0.0.1', async () => {
         // grey cloud.
         g.vehicles.cars.forEach(c=>{ if (!c.ai && Math.hypot(c.x-g.state.player.x, c.y-g.state.player.y) < 100) { c.health=c.maxHealth; c.smoke=0; c.fire=false; } });
         g.vehicles.effects().length=0; g.combat.effects.length=0;
+        // Two more civilian cars parked along the street in frame, so
+        // the block reads lived-in. Placed at the game's own parking
+        // offset from the road centre and well outside the 42 m enter
+        // range, so Mara's prompt still targets the intended car.
+        const others=g.vehicles.cars.filter(c=>!c.ai && c!==parked && Math.hypot(c.x-g.state.player.x, c.y-g.state.player.y) > 60).slice(0,2);
+        const roadY=g.world.roadsY.reduce((a,b)=>Math.abs(b-g.state.player.y)<Math.abs(a-g.state.player.y)?b:a);
+        others.forEach((c,i)=>{ c.x=g.state.player.x+(i?78:-82); c.y=roadY+9; c.angle=0; c.speed=0; c.health=c.maxHealth; c.smoke=0; c.fire=false; });
         return true; })()`);
       // A stale carjacking report from the M1 chain can mature into a star
       // while the camera settles — clear the heat so the shot is wanted 0.
@@ -270,7 +282,7 @@ server.listen(0, '127.0.0.1', async () => {
       await waitForCamera(3000);
       // The storyboard's dialog line is M1's Sal intro — real game text,
       // staged here for the shot (M2's own intro has already scrolled).
-      await evaluate(`CoralShots.stage('2-onfoot'); CoralShots.crowd(CoralGame.state.player.x, CoralGame.state.player.y, 16); true`);
+      await evaluate(`CoralShots.stage('2-onfoot'); CoralShots.crowd(CoralGame.state.player.x, CoralGame.state.player.y, 8); CoralShots.crowd(CoralGame.state.player.x + 58, CoralGame.state.player.y + 38, 8); true`);
       await evaluate(`CoralGame.missions.dialog={who:'SAL', text:'One weekend, Mara. Five little drives.', until: CoralGame.state.elapsed+60}; true`);
       await delay(200);
       await evaluate('CoralShots.freeze(true, true);true');
@@ -297,23 +309,47 @@ server.listen(0, '127.0.0.1', async () => {
       await evaluate(`(() => { const g=CoralGame, c=g.vehicles.playerCar; c.x=620; c.y=2050; c.angle=0; c.speed=0; c.vx=0; c.vy=0; g.state.player.x=620; g.state.player.y=2050; return true; })()`);
       await delay(500);
       await waitFor('!!CoralGame.police.roadblock', 20000, 'roadblock');
+      // Lay a short handbrake skid run on the approach road first (same
+      // technique as shot 1: hold W, then Space): start 150 m south of
+      // the roadblock on its vertical road, facing it, so the skid marks
+      // end up behind the car's final position. The final staging below
+      // repositions the car exactly, so drift or a police nudge during
+      // the run cannot spoil the composition.
       await evaluate(`(() => { const g=CoralGame, rb=g.police.roadblock, c=g.vehicles.playerCar;
-        c.x=rb.x; c.y=rb.y+45; c.angle=-Math.PI/2; c.speed=0; c.vx=0; c.vy=0;
+        c.x=rb.x; c.y=rb.y+150; c.angle=-Math.PI/2; c.speed=0; c.vx=0; c.vy=0;
         g.state.player.x=c.x; g.state.player.y=c.y; return true; })()`);
+      await delay(300);
+      await setKey('KeyW', true); await delay(1500);
+      await setKey('Space', true); await delay(800);
+      await releaseAll();
       await waitForCamera(3000);
       // Damage the sport to ~35% (smoke) and the driver to 35 health; put
-      // two police units clearly behind the car so the chase reads. Health
-      // is set directly: the M-chain already hurt the sport, so damage()
-      // would wreck it to 0 and the car would read as a dead wreck.
-      await evaluate(`(() => { const g=CoralGame, c=g.vehicles.playerCar;
+      // four police units clearly behind the car so the chase reads.
+      // Health is set directly: the M-chain already hurt the sport, so
+      // damage() would wreck it to 0 and the car would read as a dead
+      // wreck.
+      await evaluate(`(() => { const g=CoralGame, rb=g.police.roadblock, c=g.vehicles.playerCar;
+        /* Root cause of the invisible player car in the old capture:
+           M3's stage cleanup splices the Sable out of vehicles.cars
+           when the mission completes, while Mara is still driving it —
+           playerCar keeps referencing a car the renderer never draws.
+           Re-register it in the fleet (render.js also guards this). */
+        if (!g.vehicles.cars.includes(c)) g.vehicles.cars.push(c);
+        c.x=rb.x; c.y=rb.y+45; c.angle=-Math.PI/2; c.speed=0; c.vx=0; c.vy=0;
+        g.state.player.x=c.x; g.state.player.y=c.y;
         c.health=c.maxHealth*0.35; c.smoke=1; c.fire=false; g.state.player.health=35;
         /* Coral sport (the type's own first palette colour): the dark Sable
            paint is unreadable against the night road; the coral one reads. */
         c.color='#ff735d';
-        const units=g.police.units.slice(0, 2);
-        while (units.length < 2) { const u=g.vehicles.spawnPolice(c.x, c.y+45, -Math.PI/2); u.block=false; u.aim=0; u.shotCooldown=0; u.target=null; g.police.units.push(u); units.push(u); }
-        units[0].x=c.x-30; units[0].y=c.y+45; units[0].angle=-Math.PI/2; units[0].speed=0; units[0].target=null;
-        units[1].x=c.x+30; units[1].y=c.y+45; units[1].angle=-Math.PI/2; units[1].speed=0; units[1].target=null;
+        const units=g.police.units.slice(0, 4);
+        while (units.length < 4) { const u=g.vehicles.spawnPolice(c.x, c.y+45, -Math.PI/2); u.block=false; u.aim=0; u.shotCooldown=0; u.target=null; g.police.units.push(u); units.push(u); }
+        // Two directly behind, one angled at each rear quarter.
+        const spots=[[-30,45,-Math.PI/2],[30,45,-Math.PI/2],[-52,64,-Math.PI/2+0.6],[52,64,-Math.PI/2-0.6]];
+        units.forEach(function (u, i) { u.x=c.x+spots[i][0]; u.y=c.y+spots[i][1]; u.angle=spots[i][2]; u.speed=0; u.target=null; });
+        // Two civilian cars on the cross street through the roadblock.
+        const civs=g.vehicles.cars.filter(x=>x.ai).slice(0, 2);
+        if (civs[0]) { civs[0].x=rb.x-85; civs[0].y=rb.y; civs[0].angle=0; civs[0].speed=0; civs[0].target=null; }
+        if (civs[1]) { civs[1].x=rb.x+90; civs[1].y=rb.y; civs[1].angle=Math.PI; civs[1].speed=0; civs[1].target=null; }
         return true; })()`);
       await evaluate(`CoralShots.stage('3-chase'); true`);
       await delay(200);
@@ -326,6 +362,7 @@ server.listen(0, '127.0.0.1', async () => {
       await delay(300);
       const d = await evaluate('CoralShots.describe()');
       log.shot3 = d;
+      check('shot3InCar', d.inCar === 'sport');
       check('shot3Stars5b', d.stars === 5);
       check('shot3Roadblock', d.roadblock === true);
       check('shot3Night', d.day >= 0.99);
@@ -355,7 +392,7 @@ server.listen(0, '127.0.0.1', async () => {
         if (g.missions.banner) g.missions.banner.until=g.state.elapsed+60;
         return true; })()`);
       await waitForCamera(1500);
-      await evaluate(`CoralShots.stage('4-mission'); true`);
+      await evaluate(`CoralShots.stage('4-mission'); CoralShots.crowd(2505, 1280, 4); true`);
       await delay(200);
       await evaluate('CoralShots.freeze(true, false, true);true');
       await delay(300);

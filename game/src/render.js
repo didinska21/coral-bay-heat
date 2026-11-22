@@ -40,6 +40,13 @@ var CoralRender = (function () {
       view.x += (tx - view.x) * Math.min(1, state.dt * cfg.camera.follow);
       view.y += (ty - view.y) * Math.min(1, state.dt * cfg.camera.follow);
       state.camera = { x: view.x, y: view.y, width: vw, height: vh, zoom: zoom };
+      /* Sun elevation for the whole frame, computed once up front (the
+         shading at the bottom uses it too): 1 at noon, negative at
+         night. nightF is 0 by day and 1 deep in the night; duskF peaks
+         in the golden-hour window around day 0.79. */
+      var sunEl = Math.sin((state.day - 0.25) * TAU);
+      var nightF = sunEl < 0 ? Math.min(1, -sunEl * 2.2) : 0;
+      var duskF = Math.max(0, 1 - Math.abs(state.day - 0.79) / 0.09);
       ctx.save();
       ctx.scale(view.scale * zoom, view.scale * zoom);
       ctx.translate(-view.x, -view.y);
@@ -144,7 +151,14 @@ var CoralRender = (function () {
       /* Vehicles: every car the vehicle system owns (parked ones included),
          drawn rotated to their heading; drivers who bailed run on foot. */
       if (state.vehicles) {
-        state.vehicles.cars.forEach(function (car) {
+        /* The driven car must draw even when it is missing from the
+           fleet list: mission cleanup can splice a stage car (the M3
+           Sable) out of vehicles.cars while Mara is still driving it,
+           which left an invisible car under a floating chevron. */
+        var drawCars = state.vehicles.cars;
+        var drivenCar = state.vehicles.playerCar;
+        if (drivenCar && drawCars.indexOf(drivenCar) < 0) drawCars = drawCars.concat(drivenCar);
+        drawCars.forEach(function (car) {
           ctx.save();
           ctx.translate(car.x, car.y);
           ctx.rotate(car.angle);
@@ -285,7 +299,7 @@ var CoralRender = (function () {
          noon dark and midnight bright): 0.25 sunrise, 0.5 noon, 0.75
          sunset, 0/1 midnight. Night is a navy shade up to 0.45; near the
          horizon the sky warms — pink at dawn, orange at dusk. */
-      var sun = Math.sin((state.day - 0.25) * TAU);
+      var sun = sunEl;
       var shade = sun < 0 ? Math.min(0.45, -sun * 0.45) : 0;
       if (shade > 0) {
         ctx.fillStyle = 'rgba(25,36,64,' + shade + ')';
@@ -298,6 +312,29 @@ var CoralRender = (function () {
           ? 'rgba(250,150,170,' + (0.18 * horizon) + ')'
           : 'rgba(252,116,76,' + (0.22 * horizon) + ')';
         ctx.fillRect(view.x, view.y, vw, vh);
+      }
+      /* Night light pass, drawn AFTER the shade so the lights punch
+         through it instead of being darkened with everything else.
+         Headlight glow first: a soft warm ellipse ahead of the player's
+         car and every police car, so vehicles read against dark roads
+         (at night the navy shade alone crushes a dark car body into
+         the asphalt). Cheap: two flat ellipses per lit car, night only. */
+      if (nightF > 0.25 && state.vehicles) {
+        var glowCars = state.vehicles.cars.filter(function (c) {
+          return c.police || c === state.vehicles.playerCar;
+        });
+        var glowPc = state.vehicles.playerCar;
+        if (glowPc && glowCars.indexOf(glowPc) < 0) glowCars.push(glowPc);
+        glowCars.forEach(function (car) {
+          ctx.save();
+          ctx.translate(car.x, car.y);
+          ctx.rotate(car.angle);
+          ctx.fillStyle = 'rgba(255,216,150,' + (0.10 * nightF) + ')';
+          ctx.beginPath(); ctx.ellipse(32, 0, 32, 14, 0, 0, TAU); ctx.fill();
+          ctx.fillStyle = 'rgba(255,232,180,' + (0.10 * nightF) + ')';
+          ctx.beginPath(); ctx.ellipse(24, 0, 18, 8, 0, 0, TAU); ctx.fill();
+          ctx.restore();
+        });
       }
       ctx.restore();
       /* Mara: coral dot, pale face, and the chevron marker above her so the
