@@ -90,8 +90,8 @@ var CoralPolice = (function () {
        heights, drawn additively — bright core, soft falloff, no hard
        sand-patch edge. */
     var pb = new Baker();
-    pb.cylinder(0x8a6f3a, { x: 0, y: 0, z: 0, r: 7.4, h: 0.1, seg: 20, emis: 0.13 });
-    pb.cylinder(0xd9b96a, { x: 0, y: 0.07, z: 0, r: 4.6, h: 0.1, seg: 20, emis: 0.3 });
+    pb.cylinder(0x9a7a3a, { x: 0, y: 0, z: 0, r: 5.6, h: 0.1, seg: 20, emis: 0.08 });
+    pb.cylinder(0xd9b96a, { x: 0, y: 0.07, z: 0, r: 3.6, h: 0.1, seg: 20, emis: 0.22 });
     pb.cylinder(0xfff3cf, { x: 0, y: 0.14, z: 0, r: 2.3, h: 0.1, seg: 18, emis: 0.6 });
     poolMesh = pb.build(gl);
     var sb = new Baker();

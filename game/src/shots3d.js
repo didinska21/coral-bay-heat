@@ -147,25 +147,30 @@
   }
 
   function stageOnfoot() {
-    Coral3D.teleport(75, -30); // Neon district, avenue x=75
+    // Park the car at the south end of the market avenue, then put Mara
+    // ON FOOT among the Pasar Malam stall rows (stalls line x=63.8/86.2,
+    // z=-64..+26) so the frame reads as a populated night market:
+    // stalls both sides, crowd clustered ahead, cars stopped in-frame.
+    Coral3D.teleport(75, 20); // car stays here, behind the camera
     return delay(400).then(function () {
       key('KeyF'); // step out of the car
       return waitFor(function () { return Coral3D.stats().mode === 'foot'; }, 6000, 'on foot');
     }).then(function () {
-      Coral3D.teleport(75, 2);
-      Coral3D.mara.heading = 0.3;
+      Coral3D.teleport(75, -26); // mid-market, stalls all around
+      Coral3D.mara.heading = 0.15; // looking north up the stall rows
       Coral3D.setTime(22.6); // Neon at night
       key('Digit2'); // pistol slot selected in the HUD
       Coral3D.setWanted(2);
       return waitFor(function () { return activeUnits().length >= 2; }, 15000, 'onfoot heat');
     }).then(function () {
       var u = activeUnits();
-      placeUnit(u[0], 86, -36, 2.6); // arriving, headlights into frame
-      placeUnit(u[1], 63, 8, -2.8);  // second unit rolling in from the south
-      placeTraffic(0, 75, -125, 75, 0, 40, -1); // northbound through the market, z ~ -40
-      placeTraffic(1, 75, -125, 75, 0, 95, 1);  // southbound toward camera, z ~ -30
-      placePeds([[70, -22], [80, -10], [68, -8], [82, -24], [72, -28], [78, -30],
-                 [66, -40], [84, -44], [69, 2], [81, -52], [67, -58], [85, 14]]);
+      placeUnit(u[0], 86, -36, 2.6);  // east kerb, headlights into frame
+      placeUnit(u[1], 64, -50, -2.8); // second unit deep in the market, west side
+      placeTraffic(0, 75, -125, 75, 0, 44, -1); // stopped northbound lane, z ~ -44
+      placeTraffic(1, 75, -125, 75, 0, 81, 1);  // stopped southbound lane, z ~ -44
+      placePeds([[70, -33], [80, -35], [67, -38], [83, -41], [72, -43], [78, -45],
+                 [69, -48], [82, -37], [74, -36], [66, -52], [84, -54], [71, -31],
+                 [68, -29], [82, -30]]); // 14 shoppers among the stalls
       Coral3D.setTime(22.6);
       return freeze();
     });
@@ -218,20 +223,22 @@
     // STATS over the live city: 3/5 missions, respect 60, money $2,050
     // -> completion = 36 + 15 + 9 = 60% by the menus3d formula.
     CoralMissions.restore({ money: 2050, respect: 60, completedCount: 3 });
-    // Lively golden-hour backdrop: Marina seafront street heading east,
-    // player car + traffic + palms + peds behind the translucent panel.
+    // Lively golden-hour backdrop: seafront overlook at the beach
+    // avenue (x=525) facing EAST over the marina — the Phinisi at
+    // anchor (668, 46) on the horizon, palm rows + boardwalk crowd
+    // around the panel, avenue traffic crossing the frame.
     window.__shotCam = { dist: 12, height: 5, lookY: 1.6 };
-    Coral3D.teleport(462, 0);
-    if (car()) car().heading = -Math.PI / 2;
+    Coral3D.teleport(525, 28);
+    if (car()) car().heading = -Math.PI / 2; // east, out to sea
     Coral3D.setTime(17.8);
     return delay(700).then(function () {
-      placeTraffic(0, 375, 0, 525, 0, 120, 1);  // eastbound ahead
-      placeTraffic(1, 375, 0, 525, 0, 20, -1);  // westbound oncoming
-      placeTraffic(2, 375, 0, 525, 0, 140, 1);  // far eastbound near the shore
-      placeTraffic(3, 375, 0, 525, 0, 60, -1);  // second westbound mid-frame
-      placeTraffic(4, 525, -125, 525, 0, 90, 1); // beach avenue traffic
-      placePeds([[478, 10.5], [495, -10.5], [448, -10.5], [533, -14], [537, 6],
-                 [470, 10.5], [520, -10.5], [536, -32]]);
+      placeTraffic(0, 375, 0, 525, 0, 120, 1);   // eastbound on the seafront street
+      placeTraffic(1, 375, 0, 525, 0, 55, -1);   // westbound oncoming, mid-frame
+      placeTraffic(2, 525, -125, 525, 0, 105, 1); // beach avenue, z ~ -20 ahead-left
+      placeTraffic(3, 525, 0, 525, 125, 62, 1);  // beach avenue southbound, z ~ 62
+      placeTraffic(4, 525, 0, 525, 125, 80, -1); // beach avenue northbound, z ~ 45
+      placePeds([[534, 18], [536, 38], [533, 8], [537, 48], [520, -6],
+                 [534, 28], [531, -20], [519, 44]]); // boardwalk + avenue strollers
       if (car()) car().speed = 11; // rolling behind the panel: ~40 KM/H
       Coral3D.setTime(17.8);
       Coral3D.state = 'pause'; // menus3d shows the STATS panel
