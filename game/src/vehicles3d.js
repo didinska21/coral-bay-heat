@@ -21,7 +21,9 @@ var CoralVehicles = (function () {
     suv:     { top: 25, accel: 11, revTop: 9 },
     pickup:  { top: 24, accel: 10, revTop: 8 },
     sport:   { top: 32, accel: 16, revTop: 10 },
-    police:  { top: 34, accel: 17, revTop: 10 }
+    police:  { top: 34, accel: 17, revTop: 10 },
+    angkot:  { top: 21, accel: 9, revTop: 7 },
+    bajaj:   { top: 15, accel: 8, revTop: 6 }
   };
   var BRAKE = 24, WHEELBASE = 2.7;
   var meshCache = {};

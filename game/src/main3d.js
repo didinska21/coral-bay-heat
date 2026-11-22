@@ -54,8 +54,8 @@
   var allCars = [playerCar].concat(parkedInstances);
 
   var mara = CoralPeople.createPlayer(gl, spawn.x + 3, spawn.z, spawn.heading);
-  var traffic = CoralTraffic.create(gl, 12);
-  var crowd = CoralPeople.createCrowd(gl, 24);
+  var traffic = CoralTraffic.create(gl, 18);
+  var crowd = CoralPeople.createCrowd(gl, 38);
   var heli = CoralBakers.heli(gl, 0xe8ecf0);
 
   var mode = 'car';                    // 'car' | 'foot'

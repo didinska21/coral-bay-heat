@@ -101,9 +101,13 @@
   };
 
   function stageCover() {
-    Coral3D.startMission(1); // mission panel live (M1 First Fare)
-    // Marina seafront street (z=0) heading EAST toward the beach/sea:
-    // low, tight chase cam with the shore filling the frame ahead.
+    // Late-story context (4/5 missions done, M5 "Phinisi Sunrise" live)
+    // so the 4-star response + AIR ONE reads coherent, not a first-fare
+    // taxi run with a helicopter.
+    CoralMissions.restore({ money: 4050, respect: 80, completedCount: 4 });
+    Coral3D.startMission(5);
+    // Bukit Pandang seafront street (z=0) heading EAST toward Pantai
+    // Pasir and the sea: low, tight chase cam, shore filling the frame.
     window.__shotCam = { dist: 10.5, height: 3.6, lookY: 1.5 };
     Coral3D.teleport(462, 0);
     car().heading = -Math.PI / 2; // east, camera behind looking at the sea edge
@@ -111,7 +115,7 @@
     return delay(900).then(function () {
       Coral3D.setWanted(4); // AIR ONE + 4 units
       return waitFor(function () {
-        return activeUnits().length >= 3 && CoralPolice.heliActive;
+        return activeUnits().length >= 4 && CoralPolice.heliActive;
       }, 15000, 'cover heat');
     }).then(function () {
       // A few live ticks with units in sight of the player: the police
@@ -123,13 +127,20 @@
       placeUnit(u[0], 478, -6, -Math.PI / 2 + 0.35);   // ahead-quarter, seaward lane
       placeUnit(u[1], 461.5, 5.2, -Math.PI / 2 + 0.3);  // behind-quarter, right shoulder
       placeUnit(u[2], 486, 5, -Math.PI / 2 - 0.3);      // second car ahead
+      placeUnit(u[3], 446, -6.5, -Math.PI / 2 - 0.2);   // fourth unit trailing left
       aimHeli(462, 0, 19, -7);                           // AIR ONE upper frame, cone on player
       CoralPolice.heliState.y = 13;
       CoralPolice.heliState.heading = 2.2;
       placeTraffic(0, 375, 0, 525, 0, 120, 1);  // eastbound ahead of the player
       placeTraffic(1, 375, 0, 525, 0, 20, -1);  // westbound, oncoming lane
-      placePeds([[533, -14], [537, 6], [534, 18], [531, -26],   // boardwalk crowd
-                 [478, 10.5], [495, -10.5], [448, -10.5]]);      // near sidewalks
+      placeTraffic(2, 375, 0, 525, 0, 132, 1);  // second eastbound, near the shore
+      placeTraffic(3, 375, 0, 525, 0, 55, -1);  // second westbound mid-frame
+      placeTraffic(4, 525, -125, 525, 0, 96, 1);  // southbound on the beach avenue
+      placeTraffic(5, 525, -125, 525, 0, 30, -1); // northbound on the beach avenue
+      placePeds([[533, -14], [537, 6], [534, 18], [531, -26], [536, -40],   // boardwalk crowd
+                 [478, 10.5], [495, -10.5], [448, -10.5], [470, 10.5],
+                 [520, -10.5], [505, 10.5]]);                               // near sidewalks
+      if (car()) car().speed = 15; // rolling: ~54 KM/H on the frozen HUD
       Coral3D.setTime(17.8);
       return freeze();
     });
@@ -141,8 +152,8 @@
       key('KeyF'); // step out of the car
       return waitFor(function () { return Coral3D.stats().mode === 'foot'; }, 6000, 'on foot');
     }).then(function () {
-      Coral3D.teleport(75, -16);
-      Coral3D.mara.heading = 0.4;
+      Coral3D.teleport(75, 2);
+      Coral3D.mara.heading = 0.3;
       Coral3D.setTime(22.6); // Neon at night
       key('Digit2'); // pistol slot selected in the HUD
       Coral3D.setWanted(2);
@@ -150,14 +161,19 @@
     }).then(function () {
       var u = activeUnits();
       placeUnit(u[0], 86, -36, 2.6); // arriving, headlights into frame
-      placePeds([[70, -22], [80, -10], [68, -8], [82, -24], [72, -28], [78, -30]]);
+      placeUnit(u[1], 63, 8, -2.8);  // second unit rolling in from the south
+      placeTraffic(0, 75, -125, 75, 0, 40, -1); // northbound through the market, z ~ -40
+      placeTraffic(1, 75, -125, 75, 0, 95, 1);  // southbound toward camera, z ~ -30
+      placePeds([[70, -22], [80, -10], [68, -8], [82, -24], [72, -28], [78, -30],
+                 [66, -40], [84, -44], [69, 2], [81, -52], [67, -58], [85, 14]]);
       Coral3D.setTime(22.6);
       return freeze();
     });
   }
 
   function stageChase() {
-    Coral3D.startMission(1);
+    CoralMissions.restore({ money: 4050, respect: 80, completedCount: 4 });
+    Coral3D.startMission(5);
     Coral3D.teleport(225, -30);
     car().heading = 0;
     Coral3D.setTime(19.35); // dusk
@@ -181,6 +197,8 @@
       var u = activeUnits();
       placeUnit(u[0], bcx - 4, bcz + 40, 0.1);  // pursuit car behind
       placeUnit(u[1], bcx + 5, bcz + 45, -0.1); // second pursuer
+      placeTraffic(2, 225, -125, 225, 0, 60, -1); // civilian traffic fleeing the block
+      placeTraffic(3, 225, -125, 225, 0, 20, 1);
       aimHeli(bcx, bcz + 27, 16, -18);
       if (car()) car().speed = 26; // ~94 km/h readout on the frozen HUD
       Coral3D.setTime(19.35);
@@ -210,7 +228,11 @@
       placeTraffic(0, 375, 0, 525, 0, 120, 1);  // eastbound ahead
       placeTraffic(1, 375, 0, 525, 0, 20, -1);  // westbound oncoming
       placeTraffic(2, 375, 0, 525, 0, 140, 1);  // far eastbound near the shore
-      placePeds([[478, 10.5], [495, -10.5], [448, -10.5], [533, -14], [537, 6]]);
+      placeTraffic(3, 375, 0, 525, 0, 60, -1);  // second westbound mid-frame
+      placeTraffic(4, 525, -125, 525, 0, 90, 1); // beach avenue traffic
+      placePeds([[478, 10.5], [495, -10.5], [448, -10.5], [533, -14], [537, 6],
+                 [470, 10.5], [520, -10.5], [536, -32]]);
+      if (car()) car().speed = 11; // rolling behind the panel: ~40 KM/H
       Coral3D.setTime(17.8);
       Coral3D.state = 'pause'; // menus3d shows the STATS panel
       return freeze();

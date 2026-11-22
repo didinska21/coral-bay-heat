@@ -16,10 +16,12 @@
 
   var RANK_AT = [0, 20, 40, 60, 80, 100];
   var STATIONS = [
-    { name: 'OMBO 98.4 — Island Pop', tracks: ['Coconut Static', 'Low Tide Lover', 'Palm Wine'] },
-    { name: 'NEON TIDE FM', tracks: ['Chrome Pelican', 'Midnight Boardwalk', 'Laser Mangrove'] },
-    { name: 'GULL RADIO', tracks: ['Casino Weather', 'Salt on the Dashboard', 'Aunt Sal Says'] }
+    { name: 'SUARA PANTAI 98.4 — Pop Pantai', tracks: ['Senja di Teluk', 'Kopi Pahit Manis', 'Angkot Biru'] },
+    { name: 'GELOMBANG FM', tracks: ['Pasar Malam', 'Ombak Terakhir', 'Lampu Neon Pelabuhan'] },
+    { name: 'RADIO PHINISI', tracks: ['Angin Muson', 'Garam di Dashboard', 'Kata Tante Sari'] }
   ];
+  /* Rupiah display: internal money units are thousands of rupiah. */
+  function fmtRp(n) { return String(Math.round(n) * 1000).replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
 
   function el(tag, id, cls, parent, text) {
     var e = document.createElement(tag);
@@ -34,7 +36,7 @@
 
   /* top-left: mission + police response */
   var missionPanel = el('div', 'hud-mission', 'hud-panel hud-tl', root);
-  el('div', 'hud-mission-title', 'hud-mission-title', missionPanel, 'CORAL BAY');
+  el('div', 'hud-mission-title', 'hud-mission-title', missionPanel, 'TELUK GARUDA');
   el('div', 'hud-mission-stage', 'hud-mission-stage', missionPanel, '');
   el('div', 'hud-timer', 'hud-timer', missionPanel, '');
   var responsePanel = el('div', 'hud-response', 'hud-panel hud-response', root);
@@ -54,6 +56,16 @@
   var mapCanvas = el('canvas', 'hud-minimap', 'hud-minimap', root);
   mapCanvas.width = 200; mapCanvas.height = 150;
   var mtx = mapCanvas.getContext('2d');
+
+  /* above the minimap: current district + health bar */
+  var districtBox = el('div', null, 'hud-district', root);
+  el('div', 'hud-district-name', 'hud-district-name', districtBox, 'BUKIT PANDANG');
+  el('div', null, 'hud-district-sub', districtBox, 'TELUK GARUDA · INDONESIA');
+  var healthRow = el('div', null, 'hud-health-row', districtBox);
+  el('span', null, 'hud-health-label', healthRow, 'HEALTH');
+  var healthOuter = el('div', null, 'hud-bar-outer hud-health-outer', healthRow);
+  var healthInner = el('div', 'hud-health-bar', 'hud-bar-inner', healthOuter);
+  el('span', 'hud-health-num', 'hud-health-num', healthRow, '100');
 
   /* bottom-right: weapons / vehicle / radio */
   var br = el('div', null, 'hud-br', root);
@@ -189,7 +201,7 @@
     if (prevCompleted < 0) { prevCompleted = st.mission ? prevCompleted : CoralMissions.completedCount; prevCompleted = CoralMissions.completedCount; prevMoney = st.money; prevRank = CoralMissions.rankName(); prevStory = CoralMissions.storyComplete; prevHealth = st.health; }
     if (CoralMissions.completedCount > prevCompleted) {
       var delta = st.money - prevMoney;
-      toast('MISSION PASSED' + (delta > 0 ? ' +$' + delta : ''));
+      toast('MISSION PASSED' + (delta > 0 ? ' +Rp ' + fmtRp(delta) : ''));
       if (window.CoralSave) CoralSave.write();
     }
     prevCompleted = CoralMissions.completedCount; prevMoney = st.money;
@@ -227,7 +239,7 @@
     if (mNum > 0) {
       setText(missionPanel.children[0], 'mtitle', 'MISSION ' + mNum + ' · ' + String(mName).toUpperCase());
     } else {
-      setText(missionPanel.children[0], 'mtitle', CoralMissions.storyComplete ? 'STORY COMPLETE — FREE ROAM' : 'CORAL BAY — FREE ROAM');
+      setText(missionPanel.children[0], 'mtitle', CoralMissions.storyComplete ? 'STORY COMPLETE — FREE ROAM' : 'TELUK GARUDA — FREE ROAM');
     }
     var stage = CoralMissions.objectiveText();
     setText(missionPanel.children[1], 'mstage', stage);
@@ -247,7 +259,17 @@
       if (cache.respHtml !== lines) { cache.respHtml = lines; responsePanel.innerHTML = lines; }
     } else setDisplay(responsePanel, 'resp', 'none');
 
-    setText(document.getElementById('hud-money'), 'money', '$' + st.money.toLocaleString('en-US'));
+    setText(document.getElementById('hud-money'), 'money', 'Rp ' + fmtRp(st.money));
+
+    /* district + health */
+    var dName = st.district;
+    if (window.CoralCity) for (var di2 = 0; di2 < CoralCity.districts.length; di2++)
+      if (CoralCity.districts[di2].id === st.district) dName = CoralCity.districts[di2].name;
+    setText(document.getElementById('hud-district-name'), 'dname', String(dName).toUpperCase());
+    var hp = Math.max(0, Math.round(st.health));
+    setStyle(healthInner, 'hpW', 'width', hp + '%');
+    setStyle(healthInner, 'hpC', 'background', hp > 50 ? '#7dff9a' : hp > 25 ? '#ffd23e' : '#ff5847');
+    setText(document.getElementById('hud-health-num'), 'hpN', String(hp));
     var stars = '';
     for (var i = 0; i < 5; i++) stars += i < st.wanted ? '★' : '☆';
     setText(document.getElementById('hud-stars'), 'stars', stars);

@@ -84,10 +84,15 @@ var CoralPolice = (function () {
     }
     heliMesh = CoralBakers.heli(gl, 0xf2f4f6);
     var cb = new Baker();
-    cb.cone(0x3d331f, { x: 0, y: 0, z: 0, r: 6.5, h: 38, seg: 12, emis: 0.20 });
+    cb.cone(0x6b5a30, { x: 0, y: 0, z: 0, r: 6.5, h: 38, seg: 12, emis: 0.38 });
     coneMesh = cb.build(gl);
+    /* Feathered light pool: three concentric warm discs at staggered
+       heights, drawn additively — bright core, soft falloff, no hard
+       sand-patch edge. */
     var pb = new Baker();
-    pb.cylinder(0xa8945e, { x: 0, y: 0, z: 0, r: 4.2, h: 0.12, seg: 14, emis: 0.26 });
+    pb.cylinder(0x8a6f3a, { x: 0, y: 0, z: 0, r: 7.4, h: 0.1, seg: 20, emis: 0.13 });
+    pb.cylinder(0xd9b96a, { x: 0, y: 0.07, z: 0, r: 4.6, h: 0.1, seg: 20, emis: 0.3 });
+    pb.cylinder(0xfff3cf, { x: 0, y: 0.14, z: 0, r: 2.3, h: 0.1, seg: 18, emis: 0.6 });
     poolMesh = pb.build(gl);
     var sb = new Baker();
     sb.plane(0x0a0c10, { x: 0, y: 0, z: 0, w: 11, d: 11, emis: 0 });

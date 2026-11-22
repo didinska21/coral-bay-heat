@@ -25,8 +25,8 @@
 
   /* ------------------------------------------------------------ title */
   var title = el('div', 'menu-title', 'menu-overlay menu-title', document.body);
-  el('div', null, 'menu-wordmark', title, 'CORAL BAY HEAT');
-  el('div', null, 'menu-subtitle', title, 'Open-world crime story — 5 missions · 4 districts · one bay');
+  el('div', null, 'menu-wordmark', title, 'NUSANTARA HEAT');
+  el('div', null, 'menu-subtitle', title, 'Open-world crime story — 5 missions · Teluk Garuda, the coastal city that never sleeps');
   el('div', null, 'menu-controls', title,
     'WASD / arrows drive · F enter / exit car · SPACE handbrake · SHIFT run · J / mouse fire · ESC / P pause');
   var btnContinue = el('button', 'menu-continue', 'menu-btn', title, 'CONTINUE');
@@ -58,7 +58,7 @@
   wasted.style.display = 'none';
 
   /* ---------------------------------------------------- story complete */
-  var story = el('div', 'menu-story', 'menu-story', document.body, 'STORY COMPLETE — the bay is yours, Mara.');
+  var story = el('div', 'menu-story', 'menu-story', document.body, 'STORY COMPLETE — the bay is yours, Maya.');
   story.style.display = 'none';
 
   /* ------------------------------------------------------------ actions */
@@ -134,9 +134,13 @@
       var pct = completionPct();
       var compText = 'COMPLETION ' + pct + '%';
       if (cache.comp !== compText) { cache.comp = compText; document.getElementById('menu-completion').textContent = compText; }
+      var dName2 = st.district;
+      if (window.CoralCity) for (var di3 = 0; di3 < CoralCity.districts.length; di3++)
+        if (CoralCity.districts[di3].id === st.district) dName2 = CoralCity.districts[di3].name;
       var rows = 'Missions: ' + CoralMissions.completedCount + ' / 5' +
         '<br>Respect: ' + CoralMissions.rankName() + ' (' + CoralMissions.respect + ')' +
-        '<br>Money: $' + CoralMissions.money.toLocaleString('en-US') +
+        '<br>Money: Rp ' + String(CoralMissions.money * 1000).replace(/\B(?=(\d{3})+(?!\d))/g, '.') +
+        '<br>District: ' + dName2 + ', Teluk Garuda' +
         '<br>Cars driven: ' + st.carsDriven +
         '<br>Wanted: ' + st.wanted + ' · Health: ' + Math.round(st.health);
       if (cache.rows !== rows) { cache.rows = rows; document.getElementById('menu-stats').innerHTML = rows; }

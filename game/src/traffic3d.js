@@ -18,8 +18,8 @@
 'use strict';
 
 var CoralTraffic = (function () {
-  var VARIANTS = ['compact', 'sedan', 'suv', 'pickup', 'sport'];
-  var COLORS = [0xd94f3d, 0x3d7bd9, 0xf2b13d, 0x3fae6a, 0xe8e8ec, 0x30343a, 0x8a4fd9, 0x37b8c9, 0xd96cb0, 0x7a8894];
+  var VARIANTS = ['compact', 'sedan', 'suv', 'pickup', 'sport', 'angkot', 'angkot', 'bajaj'];
+  var COLORS = [0xd94f3d, 0x3d7bd9, 0xf2b13d, 0x3fae6a, 0xe8e8ec, 0x30343a, 0x8a4fd9, 0x37b8c9, 0xd96cb0, 0x7a8894, 0x2e7fc9, 0xe67e22];
   var LANE = 2.3;
   var rng = SeededRandom.create(4242);
 
