@@ -105,6 +105,12 @@ var CoralTraffic = (function () {
         speed: 0, cruise: 8.5 + rng() * 4.5, lane: LANE,
         x: 0, z: 0, heading: 0, radius: 1.75,
         variant: variant, color: color,
+        /* G-C action fields, read by CoralVehicles.draw: steer yaws
+           the front-wheel overlay, braking/brakeHold light the
+           brake glow, dust >= 0 pins the dust amount (else it is
+           derived from speed), steerHold freezes the staging steer
+           against the turn-decay in update(). */
+        steer: 0, steerHold: false, braking: false, brakeHold: false, dust: -1,
         mesh: CoralVehicles.meshFor(gl, variant, color)
       };
       tc.s = rng() * roads.segments[tc.seg].len * 0.9;
@@ -122,12 +128,30 @@ var CoralTraffic = (function () {
       var target = tc.cruise;
       if (ahead < 5) target = 0;
       else if (ahead < 11) target = Math.min(target, (ahead - 4) * 1.1);
+      /* G-C: braking reads in CoralVehicles.draw (brake glow) —
+         decelerating toward a lower target, or held at a standstill
+         by a blocker ahead with the brake still on. */
+      tc.braking = tc.speed > target + 0.4 || (target === 0 && tc.speed < 0.4 && ahead < 5);
       if (tc.speed < target) tc.speed = Math.min(target, tc.speed + 5.5 * dt);
       else tc.speed = Math.max(target, tc.speed - 13 * dt);
       tc.s += tc.speed * dt;
       var sg = CoralCity.roads.segments[tc.seg];
       if (tc.s >= sg.len) { pickNext(tc); }
+      var oldHeading = tc.heading;
       sync(tc);
+      /* G-C: front-wheel yaw from the heading change at a node —
+         the new segment's direction snaps in one tick, so the steer
+         spikes to the turn and then decays over ~0.5 s of travel,
+         exactly the window where the car reads as mid-turn. */
+      if (!tc.steerHold) {
+        var dh = ((tc.heading - oldHeading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+        if (Math.abs(dh) > 0.02) {
+          tc.steer = Math.max(-0.58, Math.min(0.58, dh * 1.4));
+        } else {
+          tc.steer = (tc.steer || 0) * Math.max(0, 1 - dt * 2.6);
+          if (Math.abs(tc.steer) < 0.01) tc.steer = 0;
+        }
+      }
     }
   }
 

@@ -48,6 +48,101 @@ var CoralVehicles = (function () {
   };
   var overlayCache = {};
   var beamMesh = null, beamPoolMesh = null, glowRedMesh = null, glowBlueMesh = null;
+  /* G-C action layer (Fase 4D): yawed wheel overlay, brake glow,
+     dust puffs. All seeded/fixed — no Math.random, no time source
+     except the pre-existing police light-bar pulse. */
+  var wheelMesh = null, brakeLampMesh = null, brakeGlowMesh = null,
+      brakePoolMesh = null, puffMesh = null;
+
+  /* One wheel (tyre + hub both sides), centred at the wheel centre,
+     axis along X — drawn per wheel so the FRONT pair can yaw with
+     car.steer while the baked base wheels stay hidden underneath
+     (overlay tyre is wider + larger than the baked one). */
+  function buildWheel(gl) {
+    var b = new Baker();
+    b.cylinder(0x14161a, { x: 0, y: 0, z: 0, r: 0.375, h: 0.31, seg: 10, rz: Math.PI / 2 });
+    b.cylinder(0xb9c0c7, { x: 0, y: 0, z: 0, r: 0.185, h: 0.33, seg: 7, rz: Math.PI / 2 });
+    b.cylinder(0x2a2e33, { x: 0, y: 0, z: 0, r: 0.075, h: 0.34, seg: 6, rz: Math.PI / 2 });
+    /* tread hint: 4 dark spokes boxes so yaw + roll read clearly */
+    for (var i = 0; i < 4; i++) {
+      var a = i * Math.PI / 4;
+      b.panel(0x3a4046, { x: 0, y: Math.sin(a) * 0.0, z: Math.cos(a) * 0.0, w: 0.335, h: 0.07, d: 0.30, rx: a });
+    }
+    return b.build(gl);
+  }
+  /* Radial-gradient disc, unit radius, in the XY plane facing +z,
+     colour rgb with per-ring falloff — brake-glow sprite. */
+  function buildDiscSprite(gl, rgb, peak) {
+    var b = new Baker(), SEG = 14;
+    var rings = [0, 0.4, 0.75, 1.0], fall = [peak, peak * 0.55, peak * 0.18, 0.0];
+    for (var i = 0; i < rings.length - 1; i++) {
+      var c0 = [rgb[0] * fall[i], rgb[1] * fall[i], rgb[2] * fall[i]];
+      var c1 = [rgb[0] * fall[i + 1], rgb[1] * fall[i + 1], rgb[2] * fall[i + 1]];
+      for (var s = 0; s < SEG; s++) {
+        var a0 = (s / SEG) * Math.PI * 2, a1 = ((s + 1) / SEG) * Math.PI * 2;
+        var q0 = [Math.cos(a0) * rings[i + 1], Math.sin(a0) * rings[i + 1], 0];
+        var q1 = [Math.cos(a1) * rings[i + 1], Math.sin(a1) * rings[i + 1], 0];
+        if (i === 0) {
+          b._push(0, 0, 0, 0, 0, 1, c0, 0.92);
+          b._push(q0[0], q0[1], 0, 0, 0, 1, c1, 0.92);
+          b._push(q1[0], q1[1], 0, 0, 0, 1, c1, 0.92);
+        } else {
+          var p00 = [Math.cos(a0) * rings[i], Math.sin(a0) * rings[i], 0];
+          var p01 = [Math.cos(a1) * rings[i], Math.sin(a1) * rings[i], 0];
+          b._push(p00[0], p00[1], 0, 0, 0, 1, c0, 0.92);
+          b._push(p01[0], p01[1], 0, 0, 0, 1, c0, 0.92);
+          b._push(q1[0], q1[1], 0, 0, 0, 1, c1, 0.92);
+          b._push(p00[0], p00[1], 0, 0, 0, 1, c0, 0.92);
+          b._push(q1[0], q1[1], 0, 0, 0, 1, c1, 0.92);
+          b._push(q0[0], q0[1], 0, 0, 0, 1, c1, 0.92);
+        }
+      }
+    }
+    return b.build(gl);
+  }
+  /* Dust puff: two crossed radial discs (vertical XY + vertical ZY)
+     in warm tan, unit radius — a soft billboard cross that reads
+     from any camera azimuth. */
+  function buildPuff(gl) {
+    var b = new Baker(), SEG = 12, rgb = [0.52, 0.44, 0.34];
+    var rings = [0, 0.45, 0.8, 1.0], fall = [0.16, 0.10, 0.04, 0.0];
+    for (var plane = 0; plane < 2; plane++) {
+      for (var i = 0; i < rings.length - 1; i++) {
+        var c0 = [rgb[0] * fall[i], rgb[1] * fall[i], rgb[2] * fall[i]];
+        var c1 = [rgb[0] * fall[i + 1], rgb[1] * fall[i + 1], rgb[2] * fall[i + 1]];
+        for (var s = 0; s < SEG; s++) {
+          var a0 = (s / SEG) * Math.PI * 2, a1 = ((s + 1) / SEG) * Math.PI * 2;
+          function pt(a, r) {
+            return plane === 0
+              ? [Math.cos(a) * r, Math.sin(a) * r, 0]
+              : [0, Math.sin(a) * r, Math.cos(a) * r];
+          }
+          var q0 = pt(a0, rings[i + 1]), q1 = pt(a1, rings[i + 1]);
+          var n = plane === 0 ? [0, 0, 1] : [1, 0, 0];
+          if (i === 0) {
+            b._push(0, 0, 0, n[0], n[1], n[2], c0, 0.9);
+            b._push(q0[0], q0[1], q0[2], n[0], n[1], n[2], c1, 0.9);
+            b._push(q1[0], q1[1], q1[2], n[0], n[1], n[2], c1, 0.9);
+          } else {
+            var p00 = pt(a0, rings[i]), p01 = pt(a1, rings[i]);
+            b._push(p00[0], p00[1], p00[2], n[0], n[1], n[2], c0, 0.9);
+            b._push(p01[0], p01[1], p01[2], n[0], n[1], n[2], c0, 0.9);
+            b._push(q1[0], q1[1], q1[2], n[0], n[1], n[2], c1, 0.9);
+            b._push(p00[0], p00[1], p00[2], n[0], n[1], n[2], c0, 0.9);
+            b._push(q1[0], q1[1], q1[2], n[0], n[1], n[2], c1, 0.9);
+            b._push(q0[0], q0[1], q0[2], n[0], n[1], n[2], c1, 0.9);
+          }
+        }
+      }
+    }
+    return b.build(gl);
+  }
+  /* Deterministic 0..1 hash for dust layout (seeded by car id). */
+  function hash01(n) {
+    var x = (n * 2654435761) % 4294967296;
+    x = (x ^ (x >> 13)) * 1274126177 % 4294967296;
+    return ((x ^ (x >> 16)) % 1000) / 1000;
+  }
 
   function overlayFor(gl, variant, color) {
     var key = variant + '_' + color;
@@ -189,6 +284,43 @@ var CoralVehicles = (function () {
     beamPoolMesh = buildBeamPool(gl);
     glowRedMesh = buildGlow(gl, 0xff2d40);
     glowBlueMesh = buildGlow(gl, 0x2d7bff);
+    wheelMesh = buildWheel(gl);
+    var bl = new Baker();
+    bl.box(0xff2233, { x: 0, y: 0, z: 0, w: 0.52, h: 0.15, d: 0.07, emis: 1.0 });
+    brakeLampMesh = bl.build(gl);
+    brakeGlowMesh = buildDiscSprite(gl, [1.0, 0.16, 0.20], 0.85);
+    brakePoolMesh = buildBeamPoolRed(gl);
+    puffMesh = buildPuff(gl);
+  }
+  /* Red variant of the beam pool (radial disc in XZ, unit radius). */
+  function buildBeamPoolRed(gl) {
+    var b = new Baker(), SEG = 16;
+    var warm = [1.0, 0.14, 0.18];
+    var rings = [0, 0.35, 0.7, 1.0], fall = [0.34, 0.20, 0.07, 0.0];
+    for (var i = 0; i < rings.length - 1; i++) {
+      var c0 = [warm[0] * fall[i], warm[1] * fall[i], warm[2] * fall[i]];
+      var c1 = [warm[0] * fall[i + 1], warm[1] * fall[i + 1], warm[2] * fall[i + 1]];
+      for (var s = 0; s < SEG; s++) {
+        var a0 = (s / SEG) * Math.PI * 2, a1 = ((s + 1) / SEG) * Math.PI * 2;
+        var q0 = [Math.cos(a0) * rings[i + 1], 0, Math.sin(a0) * rings[i + 1]];
+        var q1 = [Math.cos(a1) * rings[i + 1], 0, Math.sin(a1) * rings[i + 1]];
+        if (i === 0) {
+          b._push(0, 0, 0, 0, 1, 0, c0, 0.92);
+          b._push(q0[0], 0, q0[2], 0, 1, 0, c1, 0.92);
+          b._push(q1[0], 0, q1[2], 0, 1, 0, c1, 0.92);
+        } else {
+          var p00 = [Math.cos(a0) * rings[i], 0, Math.sin(a0) * rings[i]];
+          var p01 = [Math.cos(a1) * rings[i], 0, Math.sin(a1) * rings[i]];
+          b._push(p00[0], 0, p00[2], 0, 1, 0, c0, 0.92);
+          b._push(p01[0], 0, p01[2], 0, 1, 0, c0, 0.92);
+          b._push(q1[0], 0, q1[2], 0, 1, 0, c1, 0.92);
+          b._push(p00[0], 0, p00[2], 0, 1, 0, c0, 0.92);
+          b._push(q1[0], 0, q1[2], 0, 1, 0, c1, 0.92);
+          b._push(q0[0], 0, q0[2], 0, 1, 0, c1, 0.92);
+        }
+      }
+    }
+    return b.build(gl);
   }
 
   function meshFor(gl, variant, color) {
@@ -205,12 +337,17 @@ var CoralVehicles = (function () {
       id: nextId++, variant: variant, color: color,
       x: x, z: z, heading: heading || 0, speed: 0, steer: 0,
       radius: 1.75, top: spec.top, accel: spec.accel, revTop: spec.revTop,
-      mesh: meshFor(gl, variant, color), impact: 0
+      mesh: meshFor(gl, variant, color), impact: 0,
+      braking: false, brakeHold: false, dust: -1
     };
   }
 
   function update(car, input, dt) {
     var throttle = input.throttle || 0, steerIn = input.steer || 0;
+    /* G-C: braking state for the brake-light glow — brake pedal
+       against forward motion, or handbrake while rolling. */
+    car.braking = (throttle < 0 && car.speed > 0.5) ||
+      (!!input.handbrake && Math.abs(car.speed) > 0.5);
     /* --- longitudinal --- */
     if (throttle > 0) {
       if (car.speed < -0.5) car.speed += BRAKE * throttle * dt;      // braking out of reverse
@@ -306,19 +443,95 @@ var CoralVehicles = (function () {
     var gl = R.gl;
     if (!gl) return;
     R.draw(overlayFor(gl, car.variant, car.color), model);
-    /* dusk/night extras: headlight shafts + road pool, police glow.
-       DayState.emisMul rises past ~0.8 from golden hour into night. */
-    var dark = window.CoralCity && CoralCity.day && CoralCity.day.emisMul >= 0.8;
-    if (!dark) return;
     ensureFx(gl);
+    /* F-FIX (coordinator): near-field gate for the Fase 4D extras.
+       window.__camFocus is published by main3d each frame (the look
+       target: player / player car / staged tableau). Within 45 m
+       every extra renders exactly as staged; beyond it the car keeps
+       its 4C look (base + fidelity overlay + brake lamps) and saves
+       the wheel-overlay, dust, halo and beam draws that cost the
+       spawn view its fps. No focus published -> no culling. */
+    var foc = window.__camFocus;
+    var near = true;
+    if (foc) {
+      var fdx = car.x - foc[0], fdz = car.z - foc[1];
+      near = (fdx * fdx + fdz * fdz) < 2025; // 45 m
+    }
     var d = DIMS[car.variant] || DIMS.sedan;
+    var wz = d.l / 2 - 0.72, wx = d.w / 2 - 0.05;
+    /* --- G-C (a): yawed front wheels -------------------------------
+       Overlay wheels sit proud of the baked ones (r 0.375 vs 0.36,
+       width 0.31 vs 0.26) so the baked wheel is covered; the front
+       pair yaws with car.steer (player physics, traffic sync, or a
+       staging value), the rear pair stays straight. Bajaj: single
+       front wheel on the centreline. */
+    var steer = car.steer || 0;
+    var spots = car.variant === 'bajaj'
+      ? [[0, -wz, 1], [-wx, wz, 0], [wx, wz, 0]]
+      : [[-wx, -wz, 1], [wx, -wz, 1], [-wx, wz, 0], [wx, wz, 0]];
+    for (var wi = 0; near && wi < spots.length; wi++) {
+      var yaw = spots[wi][2] ? steer : 0;
+      R.draw(wheelMesh, Mat4.multiply(model,
+        Mat4.compose(spots[wi][0], 0.34, spots[wi][1], 0, yaw, 0)), { noCull: true });
+    }
+    /* --- G-C (b): brake-light glow ---------------------------------
+       Emissive lamp pair at the rear whenever the car is braking
+       (physics/traffic state) or held stopped under braking
+       (brakeHold, set by staging for roadblock / coup cars). The
+       additive halo + ground pool join once dusk falls. */
+    var braking = !!(car.braking || car.brakeHold);
+    var emis = window.CoralCity && CoralCity.day ? CoralCity.day.emisMul : 0.45;
+    if (braking) {
+      var bodyY = 0.32 + d.bh / 2, lampX = d.w / 2 - 0.30;
+      R.draw(brakeLampMesh, Mat4.multiply(model, Mat4.compose(-lampX, bodyY + 0.06, d.l / 2 + 0.03, 0, 0, 0)), { noCull: true });
+      R.draw(brakeLampMesh, Mat4.multiply(model, Mat4.compose(lampX, bodyY + 0.06, d.l / 2 + 0.03, 0, 0, 0)), { noCull: true });
+    }
+    /* --- G-C (d): tire dust ----------------------------------------
+       Seeded puffs trailing the rear tyres. Amount: car.dust when a
+       staging value is set (>= 0), else derived from |speed|.
+       Layout is a pure function of car.id + puff index, so a frozen
+       staged frame is identical on every capture. */
+    var spd = Math.abs(car.speed || 0);
+    var dustAmt = (typeof car.dust === 'number' && car.dust >= 0)
+      ? car.dust : Math.max(0, Math.min(1, (spd - 5) / 9));
+    var needBlend = near && (braking || dustAmt > 0.12 || emis >= 0.6);
+    if (!needBlend && car.variant !== 'police') return;
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
-    var hx = d.w / 2 - 0.32;
-    R.draw(beamMesh, Mat4.multiply(model, Mat4.compose(-hx, 0, -d.l / 2 - 0.05, 0, 0, 0)), { noDepthWrite: true, noCull: true });
-    R.draw(beamMesh, Mat4.multiply(model, Mat4.compose(hx, 0, -d.l / 2 - 0.05, 0, 0, 0)), { noDepthWrite: true, noCull: true });
-    R.draw(beamPoolMesh, Mat4.multiply(model, Mat4.compose(0, 0.09, -d.l / 2 - 3.4, 0, 0, 0, 2.4, 1, 4.6)), { noDepthWrite: true, noCull: true });
-    if (car.variant === 'police') {
+    if (near && braking && emis >= 0.5) {
+      var gY = 0.32 + d.bh / 2 + 0.06, gX = d.w / 2 - 0.30;
+      R.draw(brakeGlowMesh, Mat4.multiply(model, Mat4.compose(-gX, gY, d.l / 2 + 0.16, 0, 0, 0, 1.5, 1.5, 1)), { noDepthWrite: true, noCull: true });
+      R.draw(brakeGlowMesh, Mat4.multiply(model, Mat4.compose(gX, gY, d.l / 2 + 0.16, 0, 0, 0, 1.5, 1.5, 1)), { noDepthWrite: true, noCull: true });
+      R.draw(brakePoolMesh, Mat4.multiply(model, Mat4.compose(0, 0.09, d.l / 2 + 1.25, 0, 0, 0, 2.1, 1, 2.9)), { noDepthWrite: true, noCull: true });
+    }
+    if (near && dustAmt > 0.12) {
+      var seedBase = (car.id || 7) * 131 + Math.round(car.x * 10) + Math.round(car.z * 10) * 3;
+      for (var side = -1; side <= 1; side += 2) {
+        for (var k = 0; k < 3; k++) {
+          var h1 = hash01(seedBase + side * 17 + k * 41);
+          var h2 = hash01(seedBase + side * 29 + k * 97);
+          var px = side * wx + (h1 - 0.5) * 0.55;
+          var pz = wz + 0.5 + k * 0.62 + h2 * 0.3;
+          var py = 0.28 + k * 0.24 + h1 * 0.12;
+          var ps = (0.65 + k * 0.5 + h2 * 0.35) * (0.4 + dustAmt * 0.6);
+          R.draw(puffMesh, Mat4.multiply(model,
+            Mat4.compose(px, py, pz, 0, h1 * 1.2, 0, ps, ps, ps)), { noDepthWrite: true, noCull: true });
+        }
+      }
+    }
+    /* dusk/night extras: headlight shafts + road pool, police glow.
+       G-C (c): the gate drops 0.8 -> 0.6 so the cones + pools read
+       through the whole golden-hour cover light (emisMul at the
+       staged hours 17.5-18.1 spans ~0.76-0.92; at 0.8 the 17.5
+       karhutla frame lost its beams entirely). */
+    var dark = near && emis >= 0.6;
+    if (dark) {
+      var hx = d.w / 2 - 0.32;
+      R.draw(beamMesh, Mat4.multiply(model, Mat4.compose(-hx, 0, -d.l / 2 - 0.05, 0, 0, 0)), { noDepthWrite: true, noCull: true });
+      R.draw(beamMesh, Mat4.multiply(model, Mat4.compose(hx, 0, -d.l / 2 - 0.05, 0, 0, 0)), { noDepthWrite: true, noCull: true });
+      R.draw(beamPoolMesh, Mat4.multiply(model, Mat4.compose(0, 0.09, -d.l / 2 - 3.4, 0, 0, 0, 2.4, 1, 4.6)), { noDepthWrite: true, noCull: true });
+    }
+    if (car.variant === 'police' && dark) {
       var t = performance.now() / 1000;
       var dPol = d, barY = 0.32 + dPol.bh + dPol.ch + 0.16;
       var sR = 1.5 + 0.35 * Math.sin(t * 9), sB = 1.5 + 0.35 * Math.sin(t * 9 + Math.PI);

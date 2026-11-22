@@ -60,6 +60,14 @@ var CoralPolice = (function () {
   var bucketMode = false;
   var droppingVal = 0;          // seconds of water left to fall
   var bucketTime = 0;           // sway clock, advances only in bucket mode
+  /* Combat life (Fase 4D G-B, visuals only): the roadblock officer
+     aims at the player and his shots are drawn through
+     CoralCombat.spawnShot on this timer. No damage, no wanted or
+     busted changes — combat3d's own police return fire still owns
+     every damage tick. Spread uses a seeded RNG in this update
+     path only, never in draw. */
+  var officerFxTimer = 0.5;
+  var officerFxRng = SeededRandom.create(4242);
   var bucketMesh = null, cableMesh = null;
   var streamMesh = null, streamCoreMesh = null, splashMesh = null, sprayMesh = null;
   var BUCKET_CABLE = 6.2;       // cable length, heli belly -> bucket rim (m)
@@ -410,6 +418,11 @@ var CoralPolice = (function () {
     CoralVehicles.collideBuildings(c1); CoralVehicles.collideBuildings(c2);
     var officer = CoralPeople.createPerson(gl, { shirt: 0x1d3f8f, pants: 0x14181f, skin: 0x8a5a34 },
       ax + px * 6.5, az + pz * 6.5, p.heading + Math.PI);
+    /* He holds the block AIMING at the approaching player, not
+       standing to attention (pose API: people3d). update() keeps
+       his aimTarget on the player while the block is live. */
+    officer.pose = 'aim'; officer.armed = true;
+    officer.aimTarget = { x: p.x, z: p.z, y: 1.25 };
     CoralPeople.collidePerson(officer);
     block = { cars: [c1, c2], officer: officer, x: ax, z: az };
     blockCooldown = 18;
@@ -506,6 +519,34 @@ var CoralPolice = (function () {
       if (stars < 3 || dist2(block.x, block.z, p.x, p.z) > 110 * 110) block = null;
     } else if (stars >= 3 && visible && blockCooldown <= 0 && p.mode === 'car') {
       buildBlock(p);
+    }
+
+    /* --- roadblock officer: keep him aiming, draw his fire ---
+       Presentation only (see officerFxTimer note): he tracks the
+       player with his gun while the player is seen, and at 3+ stars
+       his muzzle flash / tracer / impact sparks render through
+       CoralCombat.spawnShot. When the block dissolves the officer
+       object is dropped with it, exactly as before. */
+    if (block && block.officer) {
+      var off = block.officer;
+      var odx = p.x - off.x, odz = p.z - off.z;
+      var od = Math.hypot(odx, odz);
+      if (visible || stars >= 3) {
+        off.pose = 'aim'; off.armed = true;
+        off.aimTarget = { x: p.x, z: p.z, y: 1.25 };
+        off.heading = Math.atan2(-odx, -odz);
+      } else {
+        off.pose = 'stand'; off.aimTarget = null;
+      }
+      officerFxTimer -= dt;
+      if (stars >= 3 && visible && p.mode === 'foot' && od < 45 && officerFxTimer <= 0) {
+        officerFxTimer = 0.65 + officerFxRng() * 0.35;
+        if (window.CoralCombat && CoralCombat.spawnShot && window.CoralPeople && CoralPeople.gunTip) {
+          var spx = (officerFxRng() - 0.5) * 0.7, spz = (officerFxRng() - 0.5) * 0.7;
+          CoralCombat.spawnShot(CoralPeople.gunTip(off),
+            { x: p.x + spx, y: 1.25, z: p.z + spz });
+        }
+      }
     }
 
     /* --- AIR ONE --- */

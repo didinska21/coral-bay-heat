@@ -204,8 +204,16 @@
       var spd = Math.abs(f.speed);
       dist = 10.5 + spd * 0.16; height = 4.9 + spd * 0.045; lookY = 1.7;
     } else { dist = 6.5; height = 2.8; lookY = 1.45; }
-    if (window.__shotCam && mode === 'car') { // screenshot staging override (shots3d.js)
-      dist = window.__shotCam.dist; height = window.__shotCam.height; lookY = window.__shotCam.lookY;
+    if (window.__shotCam) { // screenshot staging override (shots3d.js)
+      // H-B camera unlock: honoured in FOOT mode too (was car-only),
+      // so the closer/lower foot framing staged by shots3d (dist 5.2,
+      // height 2.05, lookY ~1.3) actually takes effect. Per-field
+      // guards: a shot that sets only some fields, or none, renders
+      // exactly as before.
+      var sc = window.__shotCam;
+      if (typeof sc.dist === 'number') dist = sc.dist;
+      if (typeof sc.height === 'number') height = sc.height;
+      if (typeof sc.lookY === 'number') lookY = sc.lookY;
     }
     var tx = f.x - fx * dist, tz = f.z - fz * dist;
     var k = snapCam ? 1 : 1 - Math.exp(-dt * 3.6);
@@ -231,9 +239,14 @@
       camPos[1] += (hc.y - camPos[1]) * 0.08;
       camPos[2] += (hc.z - camPos[2]) * 0.08;
       camLook = [hc.lx, hc.ly, hc.lz];
-    }
+      // H-B camera unlock: honour the staged cant (shots3d returns
+      // roll: 0.07 for the M8 chase heliCam). Default 0 everywhere
+      // else = the old fixed-up behaviour, bit for bit.
+      camRoll = (typeof hc.roll === 'number') ? hc.roll : 0;
+    } else camRoll = 0;
   }
   var camLook = [playerCar.x, 1.7, playerCar.z - 9];
+  var camRoll = 0; // radians, around the view axis; 0 = fixed [0,1,0] up
 
   /* ------------------------------------------------------------ render */
   function heliPose(t) {
@@ -257,7 +270,26 @@
       cam = [playerCar.x - 10.5, 4.6, playerCar.z + 14.5];
       look = [playerCar.x + 18, 1.8, playerCar.z - 30];
     } else { cam = camPos; look = camLook; }
-    var view = Mat4.lookAt(cam, look, [0, 1, 0]);
+    /* H-B: build the lookAt up vector from camRoll. roll 0 returns
+       exactly [0,1,0] (today's behaviour everywhere else); a staged
+       roll rotates the world-up around the view forward axis:
+       up' = cos(roll)*up + sin(roll)*(forward x up). */
+    var up = [0, 1, 0];
+    if (camRoll) {
+      var fxv = look[0] - cam[0], fyv = look[1] - cam[1], fzv = look[2] - cam[2];
+      var fl = Math.hypot(fxv, fyv, fzv) || 1; fxv /= fl; fyv /= fl; fzv /= fl;
+      var crx = fyv * 0 - fzv * 1, cry = fzv * 0 - fxv * 0, crz = fxv * 1 - fyv * 0; // forward x [0,1,0]
+      var cs = Math.cos(camRoll), sn = Math.sin(camRoll);
+      up = [cs * 0 + sn * crx, cs * 1 + sn * cry, cs * 0 + sn * crz];
+    }
+    /* F-FIX (coordinator): publish the camera focus (the look target —
+       the player on foot, the player car when driving, the staged
+       tableau in shot mode) so CoralVehicles.draw can distance-cull
+       its Fase 4D extras (wheel overlays, dust, halos, beams) to the
+       near field. Staged subjects sit within metres of the focus;
+       generic far traffic keeps the 4C look. */
+    window.__camFocus = [look[0], look[2]];
+    var view = Mat4.lookAt(cam, look, up);
     var vp = Mat4.multiply(proj, view);
 
     R.beginFrame(vp, day.clear);

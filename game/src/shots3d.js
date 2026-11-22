@@ -254,6 +254,127 @@
     if (!ped) return;
     ped.speed = 2.1; ped.walkPhase = phase;
   }
+  /* ---- G-C (Fase 4D) action staging helpers -----------------------
+     Pose API: a parallel session adds a `pose` field to people3d
+     figures ('stand'|'aim'|'crouch'|'stride'|'lean'). Set it ONLY
+     when the field already exists on the figure, so staging works
+     with or without that session's build; the speed/walkPhase
+     fallbacks below guarantee a non-attention read either way. */
+  function setPose(ped, pose, aimTarget) {
+    if (!ped) return;
+    /* G-B pose API is live: prefer CoralPeople.setPose (sets pose +
+       aimTarget + armed in one call). The field-write fallback is
+       kept for safety if the API is ever absent. */
+    if (window.CoralPeople && CoralPeople.setPose) {
+      CoralPeople.setPose(ped, pose, aimTarget);
+    } else if ('pose' in ped) {
+      ped.pose = pose;
+      if (aimTarget !== undefined) ped.aimTarget = aimTarget;
+    }
+  }
+  function posePed(ped, pose, phase, aimTarget) {
+    if (!ped) return;
+    setPose(ped, pose, aimTarget);
+    if (pose === 'stride') setStride(ped, phase || 1.4);
+    else if (pose === 'aim' || pose === 'crouch' || pose === 'lean') {
+      /* a hint of weight shift even without the pose API: a frozen
+         quarter-stride phase keeps limbs off the attention pose */
+      ped.speed = 0; ped.walkPhase = phase || 0;
+    }
+  }
+  /* G-C/G-B: a GUARANTEED mid-burst frame. spawnShot(from, to)
+     creates flash + tracer + sparks on demand; called in the
+     freeze tick (this tableau runs inside scanFireFreeze's finish
+     or the final placement tick), the frozen sim never decays the
+     FX timers, so the burst is present in the captured frame with
+     certainty — the pixel scan remains as the live-fire layer on
+     top. from = the shooter's real gunTip, so the flash sits on
+     the barrel of the aiming figure. */
+  function burst(fromPed, to) {
+    if (!fromPed || !window.CoralCombat || !CoralCombat.spawnShot) return;
+    if (!window.CoralPeople || !CoralPeople.gunTip) return;
+    try { CoralCombat.spawnShot(CoralPeople.gunTip(fromPed), to); } catch (e) { /* best-effort */ }
+  }
+  /* Face a figure at a world point (heading convention: forward =
+     (-sin h, -cos h)). */
+  function faceToward(ped, tx, tz) {
+    if (!ped) return;
+    ped.heading = Math.atan2(-(tx - ped.x), -(tz - ped.z));
+  }
+  /* Vehicle action state for a staged car: yawed front wheels,
+     brake glow held on, pinned dust amount. All plain fields read
+     by CoralVehicles.draw — deterministic, no timers. */
+  function stageCarFx(c, steer, brake, dust) {
+    if (!c) return;
+    if (typeof steer === 'number') c.steer = steer;
+    if (brake) c.brakeHold = true;
+    if (typeof dust === 'number') c.dust = dust;
+  }
+  function placeUnitEx(u, x, z, heading, steer) {
+    placeUnit(u, x, z, heading);
+    if (u) stageCarFx(u.car, steer, true, 0);
+  }
+  /* Near-foreground figure for depth: placed `back` metres behind
+     Mara (toward the foot camera) and `side` metres to her right,
+     back/shoulder to camera, facing her heading. Computed from her
+     fixed staged position + heading, so it is deterministic. Uses a
+     crowd ped index outside every mission's guard picks. */
+  function foregroundFigure(idx, mx, mz, heading, back, side, pose, aimTarget) {
+    var gp = Coral3D.crowd.peds, ped = gp[idx];
+    if (!ped) return null;
+    var fx = -Math.sin(heading), fz = -Math.cos(heading);
+    var rx = -fz, rz = fx; // right of facing (f x up)
+    ped.x = mx - fx * back + rx * side;
+    ped.z = mz - fz * back + rz * side;
+    ped.heading = heading;
+    ped.down = false;
+    posePed(ped, pose, 0.7, aimTarget);
+    return ped;
+  }
+  /* ---- H-B density helpers ---------------------------------------
+     'VISUAL DIBUAT SERAME MUNGKIN': extra figures in MOTION and
+     extra queued vehicles, layered foreground/midground. All
+     deterministic (fixed indices/positions/phases), all cheap:
+     each figure is one people3d draw set, each vehicle one draw
+     set — tens of added draws per frame, not hundreds.
+     placeExtraPed writes a crowd ped by INDEX directly — never
+     via placeCrowd/addStagingCluster, which reuse peds[0..] and
+     would displace mission guards. Callers pick indices clear of
+     every guard pick (2,5,8,11,14) and of the foreground figure
+     (20). */
+  function placeExtraPed(idx, x, z, heading, pose, phase, aimTarget) {
+    var ped = Coral3D.crowd.peds[idx];
+    if (!ped) return null;
+    ped.x = x; ped.z = z; ped.heading = heading; ped.down = false;
+    if (aimTarget) faceToward(ped, aimTarget[0], aimTarget[1]);
+    posePed(ped, pose || 'stride', phase || 1.4,
+      aimTarget ? { x: aimTarget[0], z: aimTarget[1], y: 1.25 } : undefined);
+    return ped;
+  }
+  /* Place one extra parked vehicle (angkot/bajaj preferred — the
+     local-traffic read Bos asked for — then any non-sedan body, so
+     it can never steal a scene's sedan backstop) as queued traffic:
+     brake glow held, wheels yawed, optional pinned dust. The
+     parkedEntry moves with the instance, as in placeBackstop. */
+  var busyCarsPlaced = {};
+  function placeExtraVehicle(x, z, heading, steer, brake, dust) {
+    var cars = Coral3D.allCars, pick = null, i, c;
+    for (i = 1; i < cars.length && !pick; i++) {
+      c = cars[i];
+      if (busyCarsPlaced[c.id] || c.activated) continue;
+      if (c.variant === 'angkot' || c.variant === 'bajaj') pick = c;
+    }
+    for (i = 1; i < cars.length && !pick; i++) {
+      c = cars[i];
+      if (busyCarsPlaced[c.id] || c.activated) continue;
+      if (c.variant !== 'sedan' && c.variant !== 'police' && c.variant !== 'sport') pick = c;
+    }
+    if (!pick) return null;
+    busyCarsPlaced[pick.id] = true;
+    placeBackstop(pick, x, z, heading);
+    stageCarFx(pick, steer, brake, dust);
+    return pick;
+  }
   /* Pick a DARK parked car as the spark backstop: the orange spark
      box is invisible against Mara's red sport car, but pops against
      a dark blue/black body. Parked instances are drawn by the city
@@ -323,25 +444,65 @@
     // its top-right corner lands around screen x ~675/1280, well
     // clear of the DOM crew-chip stack (x >= ~1000). Units sit at
     // low azimuth from the foot camera (half-FOV ~46 deg).
-    placeUnit(u[0], 545, -41, -2.0);    // north doors, angled in
-    placeUnit(u[1], 545, -25.5, 2.2);   // south foreground, angled in
+    // G-C: every unit is a car that has just SLID to a stop mid-
+    // turn — front wheels yawed, brake glow held on.
+    placeUnitEx(u[0], 545, -41, -2.0, 0.5);    // north doors, angled in
+    placeUnitEx(u[1], 545, -25.5, 2.2, -0.5);  // south foreground, angled in
     // G-A take 7: place EVERY active unit — at wanted 4 there are
     // up to four, and in take 6 an unplaced unit drove up during
     // the scan and parked on Mara's back, filling the foreground
     // with its lightbar in the frozen frame.
-    placeUnit(u[2], 546, -44.5, -2.4);  // far north doors
-    placeUnit(u[3], 547, -21, 2.4);     // far south foreground
+    placeUnitEx(u[2], 546, -44.5, -2.4, 0.42); // far north doors
+    placeUnitEx(u[3], 547, -21, 2.4, -0.42);   // far south foreground
     var gp = Coral3D.crowd.peds;
-    var line = [[546.5, -42], [546.5, -37.5], [547, -33.5], [546, -40], [547.5, -30]];
+    /* G-C restage: the guard line comes CLOSER (6-9 m from Mara,
+       was 8.5-10) and nobody stands at attention — two aim back at
+       her, one is crouched behind the line, two advance mid-stride.
+       Every guard faces Mara exactly (faceToward), not a generic
+       west. */
+    var line = [[544.6, -41.5], [544.0, -38.6], [545.2, -35.6], [543.8, -33.0], [544.8, -30.2]];
+    var poses = ['aim', 'aim', 'crouch', 'stride', 'stride'];
+    var phases = [0.4, 0.9, 0.2, 1.1, 2.6];
+    var maraPt = { x: 538, z: -36.5, y: 1.25 };
     [2, 5, 8, 11, 14].forEach(function (pi, gi) {
       if (gp[pi] && line[gi]) {
         gp[pi].x = line[gi][0]; gp[pi].z = line[gi][1];
-        gp[pi].heading = Math.PI / 2; // face WEST, at Mara
-        gp[pi].speed = 0;
+        faceToward(gp[pi], 538, -36.5);
+        /* aiming guards get a real aimTarget (Mara) so their gun
+           arms track her; crouch/stride guards keep their pose */
+        posePed(gp[pi], poses[gi], phases[gi], poses[gi] === 'aim' ? maraPt : undefined);
       }
     });
-    setStride(gp[8], 1.1);   // mid-stride advance poses
-    setStride(gp[14], 2.6);
+    /* G-C: NEAR FOREGROUND — a crew figure's shoulder at the
+       camera's right edge, ~3.4 m from the lens, back to camera,
+       aiming past Mara at the doors. Kills the empty flat
+       foreground the comparator flagged. */
+    foregroundFigure(20, 538, -36.5, -1.82, 3.1, 1.8, 'aim', { x: 548.5, z: -33.8, y: 1.1 });
+    /* Mara herself: firing pose, aimed at the backstop car. */
+    setPose(Coral3D.mara, 'aim', { x: 548.5, z: -33.8, y: 1.1 });
+    if (Coral3D.mara) { Coral3D.mara.speed = 0; Coral3D.mara.walkPhase = 0.55; }
+    /* G-C/G-B: guaranteed mid-burst — one guard's shot streaks to
+       Mara (tracer + sparks at her position), Mara's return shot
+       streaks to the backstop (sparks on the dark flank). Spawned
+       in this freeze tick; frozen FX never decay. */
+    burst(gp[5], maraPt);
+    burst(Coral3D.mara, { x: 548.5, z: -33.8, y: 1.15 });
+    /* H-B DENSITY (cover): the forecourt/street edges fill with
+       figures in MOTION — two crew crossing in opposite strides at
+       the north/south frame edges, a lookout leaning at the south
+       palm line, a sixth figure crouched at the backstop's flank —
+       plus queued local traffic at both frame edges: an angkot
+       held on its brakes south, a second vehicle north, both
+       yawed. Indices avoid guard picks (2,5,8,11,14) and the
+       foreground figure (20). */
+    placeExtraPed(16, 541.5, -47.5, 1.35, 'stride', 0.8);
+    placeExtraPed(17, 540.5, -24.8, -1.2, 'stride', 2.9);
+    placeExtraPed(18, 535.8, -27.5, -1.82, 'lean', 0.5);
+    placeExtraPed(19, 546.5, -30.8, -1.82, 'crouch', 0.3);
+    placeExtraPed(21, 543.5, -43.8, -1.82, 'stride', 1.9);
+    placeExtraPed(22, 537.0, -45.5, 0.4, 'stride', 0.2);
+    placeExtraVehicle(535.5, -19.5, 0.9, -0.4, true, 0.35);
+    placeExtraVehicle(543.0, -50.5, -2.5, 0.4, true, 0);
     // AIR ONE FULLY in frame (G-A repair: the old y=10.5 mark put
     // its rotor over the foot cam's +22 deg top edge — only the
     // belly shipped). Take-2 mark (555,-30) y=9.5, over the roof's
@@ -395,6 +556,9 @@
       // combat3d's lateral test), so the car is the target at any
       // range and every shot sparks on it.
       placeBackstop(Coral3D.allCars[0], 548.5, -33.8, Math.PI / 2);
+      /* G-C: the backstop reads as a car caught mid-turn, not a
+         parked prop — front wheels yawed hard. */
+      stageCarFx(Coral3D.allCars[0], 0.42, false, 0);
       var sedan = null, sedanLum = 1e9;
       for (var si = 1; si < Coral3D.allCars.length; si++) {
         var sc2 = Coral3D.allCars[si];
@@ -403,9 +567,14 @@
         var slum = 0.3 * ((scol >> 16) & 255) + 0.5 * ((scol >> 8) & 255) + 0.2 * (scol & 255);
         if (slum < sedanLum) { sedanLum = slum; sedan = sc2; }
       }
-      if (sedan) placeBackstop(sedan, 533, -44, 0.3);
+      if (sedan) { placeBackstop(sedan, 533, -44, 0.3); stageCarFx(sedan, -0.35, true, 0); }
       Coral3D.teleport(538, -36.5);
       Coral3D.mara.heading = -1.82;
+      /* G-C: closer/lower foot camera — since H-B main3d honours
+         __shotCam in FOOT mode too, so this framing is now REAL
+         in the captured frame (was a car-mode-only proposal). */
+      window.__shotCam = { dist: 5.2, height: 2.05, lookY: 1.3 };
+      setPose(Coral3D.mara, 'aim');
       return waitVisible(5000); // heli spotlight sees her almost at once
     }).then(function () {
       Coral3D.teleport(538, -36.5);
@@ -452,13 +621,18 @@
       // out, ~5 deg elevation) mid-frame and the blue roof above.
       return exitCarTo(532, 44, -Math.PI / 2);
     }).then(function () {
-      // Her getaway car parks behind the foot camera, out of frame.
+      // G-C restage: her getaway car becomes the near-right
+      // FOREGROUND — swung in at the frame's south-east edge, rear
+      // three-quarter to camera, wheels yawed, brake glow held:
+      // she has just bailed out of it. (Was parked behind camera.)
       if (Coral3D.allCars[0]) {
-        Coral3D.allCars[0].x = 524; Coral3D.allCars[0].z = 53;
-        Coral3D.allCars[0].heading = 0.5; Coral3D.allCars[0].speed = 0;
+        Coral3D.allCars[0].x = 531.5; Coral3D.allCars[0].z = 51.5;
+        Coral3D.allCars[0].heading = -2.2; Coral3D.allCars[0].speed = 0;
+        stageCarFx(Coral3D.allCars[0], 0.5, true, 0);
       }
       Coral3D.teleport(532, 44);
       Coral3D.mara.heading = -Math.PI / 2;
+      window.__shotCam = { dist: 5.2, height: 2.05, lookY: 1.35 }; // foot-cam proposal, see cover note
       // Tame the centre fire (558,44, scale 1.6): at 0.25 its flames
       // stay hidden inside the building and its smoke is a modest
       // wisp behind the roof apex instead of the blob that ate the
@@ -474,6 +648,40 @@
       // close at both ends of the facade.
       CoralFire.create('mbgN', 545, 30.5, 1.45); CoralFire.setIntensity('mbgN', 1);
       CoralFire.create('mbgS', 545, 58.5, 1.45); CoralFire.setIntensity('mbgS', 1);
+      /* G-C: FOREGROUND burning debris at the camera's left edge —
+         a stall/debris fire ~6 m from the lens at (530.5,41), so
+         flame billboards sit big in the near frame beside Mara,
+         not only at the facade 13 m out. A smaller second pile
+         balances the right edge. */
+      CoralFire.create('mbgFg', 530.5, 41.0, 0.85); CoralFire.setIntensity('mbgFg', 1);
+      CoralFire.create('mbgFg2', 531.5, 47.6, 0.55); CoralFire.setIntensity('mbgFg2', 1);
+      /* G-C: figures beside the police cars, none at attention —
+         one crouched at the north unit's flank, one aiming from
+         the south unit, one striding in between. placeCrowd is
+         safe here: M7's escape stage keeps no guards in the crowd
+         (the Kopdes warning does not apply). */
+      placeCrowd([
+        [537.5, 39.2, -2.1, 'crouch'],
+        [538.5, 49.0, -1.05, 'aim', [532, 44]],
+        [535.5, 44.6, -1.5, 'stride'],
+        /* H-B DENSITY (onfoot): two more figures crossing the
+           forecourt in opposite strides and a lookout leaning in
+           the near-left foreground beside the debris fire — the
+           frame's midground is never empty between Mara, the
+           units and the flame wall. */
+        [534.5, 37.8, -0.6, 'stride'],
+        [536.5, 51.5, -2.4, 'stride'],
+        [529.8, 46.8, -1.57, 'lean']
+      ]);
+      /* H-B DENSITY: queued local traffic stacked behind the two
+         police units at both forecourt corners — an angkot and a
+         second vehicle held on their brakes, wheels yawed, a
+         little dust still hanging off the angkot. */
+      placeExtraVehicle(537.0, 33.5, -1.2, 0.45, true, 0.4);
+      placeExtraVehicle(537.5, 55.0, -1.9, -0.45, true, 0);
+      var cp = Coral3D.crowd.peds;
+      if (cp[0]) faceToward(cp[0], 532, 44);
+      if (cp[1]) faceToward(cp[1], 532, 44);
       return waitVisible(8000);
     }).then(function () {
       Coral3D.teleport(532, 44);
@@ -484,18 +692,32 @@
       // repair: the shipped take half-cropped them at the frame
       // edges). From the camera at (525.5,44) these marks sit at
       // ~24 deg azimuth — well inside the ~46 deg half-FOV.
+      // G-C: units arrive mid-turn — yawed wheels, brake glow held.
       var u = activeUnits();
-      placeUnit(u[0], 540, 37.5, -Math.PI / 2 + 0.35); // north forecourt
-      placeUnit(u[1], 540, 50.5, -Math.PI / 2 - 0.35); // south forecourt
+      placeUnitEx(u[0], 540, 37.5, -Math.PI / 2 + 0.35, 0.48); // north forecourt
+      placeUnitEx(u[1], 540, 50.5, -Math.PI / 2 - 0.35, -0.48); // south forecourt
       Coral3D.setTime(18.1);
       // A beat with the units in sight (SEARCHING clears on the
       // response panel), then re-place them in the freeze tick.
       return delay(400).then(function () {
         var u2 = activeUnits();
-        placeUnit(u2[0], 540, 37.5, -Math.PI / 2 + 0.35);
-        placeUnit(u2[1], 540, 50.5, -Math.PI / 2 - 0.35);
+        placeUnitEx(u2[0], 540, 37.5, -Math.PI / 2 + 0.35, 0.48);
+        placeUnitEx(u2[1], 540, 50.5, -Math.PI / 2 - 0.35, -0.48);
         Coral3D.teleport(532, 44);
         Coral3D.mara.heading = -Math.PI / 2;
+        /* G-C: Mara caught MID-STRIDE backing away from the heat —
+           pose API stride + the speed/walkPhase fallback both set,
+           in the freeze tick so live player updates can't zero it. */
+        posePed(Coral3D.mara, 'stride', 2.2);
+        /* Re-pin the crowd figures (live ticks may have moved the
+           waiting peds' phases, not their places). */
+        var cp2 = Coral3D.crowd.peds;
+        posePed(cp2[0], 'crouch', 0.3);
+        posePed(cp2[1], 'aim', 0.6, { x: 532, z: 44, y: 1.25 });
+        posePed(cp2[2], 'stride', 1.9);
+        posePed(cp2[3], 'stride', 1.2);
+        posePed(cp2[4], 'stride', 2.7);
+        posePed(cp2[5], 'lean', 0.5);
         Coral3D.setTime(18.1);
         return freeze();
       });
@@ -521,7 +743,13 @@
      cannot complete a bust while it counts as moving. */
   function stageChase() {
     if (!window.__bigMission('karhutla', 'peak')) throw new Error('karhutla peak hook returned false');
-    Coral3D.setTime(17.5);
+    /* H-B RESTAGE (Bos 23 Nov 02:46): DARKER GRADING — 19.45 is
+       dusk/early-night (amb ~0.375, emisMul ~1.6): the fire wall
+       GLOWS against dark surroundings, vehicle headlight shafts
+       switch on (vehicles3d dark extras at emis >= 0.6), and the
+       HUD/mission text stay readable — full night (21+) would
+       crush them. Every setTime in this scene pins 19.45. */
+    Coral3D.setTime(19.45);
     if (car()) car().heading = -Math.PI / 2; // east, along the post road
     // Tracking camera in place of the command-post heliCam.
     var origHeliCam = CoralMissions.heliCam;
@@ -545,7 +773,49 @@
       // (300,-512) is ~105 deg off-axis — fully out of frame; the
       // post road (z -375) only clips the bottom-right corner; the
       // charred strip fills the lower-left/centre.
-      return { x: 335, y: 10.5, z: -393, lx: 378, ly: 13.5, lz: -402 };
+      /* G-C restage: camera pulled EAST and DOWN toward the drop
+         line (was (335,10.5,-393)) so its equilibrium with the
+         car-chase base camera lands ~28-30 m from the frozen heli
+         instead of ~45 m, and `roll` carries the requested camera
+         CANT — since H-B, main3d builds the lookAt up vector from
+         hc.roll, so the 0.07 cant is real in the captured frame
+         (it was a forward-compatible field under G-C). The look
+         target sits north of the camera axis, throwing the fire
+         line diagonal across the lower frame. */
+      /* FINAL RESTAGE (comparator: "heli a small dark silhouette
+         at top-centre, NO BUCKET VISIBLE, nothing shows a water
+         drop" + "far-left solid black trunk void"): the old camera
+         sat WEST of the drop looking EAST — dead astern of the
+         eastbound heli, so AIR ONE read as its 1.7 m tail with the
+         rotor edge-on, the bucket a speck at ~32 m, and the settled
+         camera stood INSIDE khShotC's grove band, putting a trunk
+         a few metres away on the left edge. The camera now sits
+         SOUTH of the drop point (368,-375) looking NORTH across
+         the line: the heli (374,-401, heading east) reads in full
+         7.8 m PROFILE against the flame wall at ~26 m, offset
+         right of centre by the west-shifted look target, and the
+         whole drop column — heli -> 6.2 m cable -> orange bucket
+         -> water sheet -> splash disc — spans the mid-frame above
+         the dialogue box (splash lands ~y 560/720). No grove band
+         is within ~11 m of this camera, so no trunk can black out
+         an edge. roll 0.07 as before. */
+      /* BUCKET FIX (judge round 3: "bucket and cable COMPLETELY
+         ABSENT"): the bucket WAS rendering, but unreadably —
+         (a) it hangs from heliState ORIGIN while the tail-heavy
+         heli mesh (nose +2.5 m / tail fin -5.35 m from origin)
+         puts the fuselage's visual centre ~1.4 m WEST of the
+         origin, so the column projected ~55-85 px off the body;
+         (b) at the ~26 m standoff the 2.3 m bucket was ~55 px
+         and the 0.1 m dark cable ~2 px against dark dusk sky;
+         (c) its screen spot landed inside the charred-trunk band
+         and thick trunks split/covered it and the faint additive
+         sheet. Fix: camera CLOSES to ~17 m from the drop (bucket
+         ~100 px, cable ~4 px), the look target centres on the
+         ORIGIN (374,-401) — the cable attach point, not the
+         fuselage centroid — and the tableau drops AIR ONE to
+         y 13 so the bucket hangs low, silhouetted against the
+         flame wall / smoke with the sheet over charred ground. */
+      return { x: 365, y: 6.5, z: -385, lx: 368, ly: 6.0, lz: -401, roll: 0.07 };
     };
     // G-A repair fire staging: the mission fire under the drop
     // window (kh3 at (375,-412)) is weakened to a wisp (intensity
@@ -556,8 +826,20 @@
     // cones stand in the lower frame on both sides of the stream
     // while their smoke columns rise off-centre. kh4 (475,-400)
     // keeps burning far down the line as a small background fire.
-    CoralFire.create('khShotA', 386, -390, 1.85); CoralFire.setIntensity('khShotA', 1);
-    CoralFire.create('khShotB', 388, -414, 1.85); CoralFire.setIntensity('khShotB', 1);
+    CoralFire.create('khShotA', 386, -390, 2.0); CoralFire.setIntensity('khShotA', 1);
+    CoralFire.create('khShotB', 388, -414, 2.0); CoralFire.setIntensity('khShotB', 1);
+    /* H-B DENSITY (chase): two more large cones close the gaps
+       west and east of the drop point, so the staging fires read
+       as one CONTINUOUS WALL with H-A's fireLine flames (built in
+       missions3d at the anchor) instead of separated cones —
+       (404,-410) extends the wall east past the splash. FINAL
+       RESTAGE: khShotC moved WEST to (352,-394) — at (368,-392)
+       its flames stood on the new south camera's axis and masked
+       the drop column, and its grove band surrounded the old
+       camera; at (352,-394) it is a large foreground flame at the
+       frame's left edge, ~16 m clear of the camera. */
+    CoralFire.create('khShotC', 352, -394, 1.7); CoralFire.setIntensity('khShotC', 1);
+    CoralFire.create('khShotD', 404, -410, 1.75); CoralFire.setIntensity('khShotD', 1);
     CoralFire.setIntensity('kh3', 0.1);
     return delay(300).then(function () {
       Coral3D.setWanted(2); // hook-peak spec
@@ -587,30 +869,100 @@
       // car is re-teleported every poll tick so it cannot creep
       // east and drag the camera with it (the tick teleport also
       // keeps pursuit units from settling into a bust).
-      Coral3D.teleport(340, -410);
-      if (car()) { car().heading = -Math.PI / 2; car().speed = 0; }
+      /* FINAL RESTAGE: the player car parks at (368,-386) facing
+         NORTH (heading 0), so the base chase camera settles BEHIND
+         it at ~(368,5,-375.5) — agreeing with the new south-side
+         heliCam instead of dragging the equilibrium back west.
+         The car itself sits at the bottom edge under the camera;
+         the drop column plays out ahead of it. */
+      /* BUCKET FIX (final, take 2 of 3): car re-parked at
+         (365,-394) facing NORTH — its chase-cam target
+         (365,4.9,-383.5) agrees with the closer heliCam
+         (365,6.5,-385), so the equilibrium camera settles
+         ~(365,5.2,-384), ~17 m from the drop column at
+         (369,-401). A take-3 push to ~14 m (car at -398) was
+         tried and REVERTED: the nearer camera put giant grove
+         trunks across the frame and cropped the heli at the
+         top edge. */
+      Coral3D.teleport(365, -394);
+      if (car()) { car().heading = 0; car().speed = 0; }
       // Real-time poll for the mid-line drop window.
       var t0 = Date.now();
+      /* G-C freeze-tick tableau: with the sim about to freeze, pin
+         the heli LOW (y 22, was the loop's 27) and at (374,-401) —
+         ~28 m from the settled camera — so the cable + bucket +
+         stream + splash read as ONE vertical line, big in frame:
+         belly y 21 -> bucket rim ~14.8 -> floor ~13.3 -> stream ->
+         splash disc on the charred strip. The player car below
+         gets its action state: wheels yawed, dust pinned full. */
+      function chaseTableau() {
+        var h = CoralPolice.heliState;
+        /* H-B RESTAGE: AIR ONE INSIDE the spectacle — LOW at
+           y 19.5 (was 22, loop flies 27), heading east along the
+           line so its profile + rotor read against the flame
+           wall. The freeze lands MID-DROP: dropping pinned, the
+           splash called in this same tick — the vertical line
+           heli -> cable -> bucket -> water stream -> splash disc
+           (+ the steam burst H-A raises on splash) is all in
+           frame at once, over the wall. */
+        /* FINAL RESTAGE: y 14.5 (was 19.5) — the bucket rim sits
+           at y ~7.3 and the stream spans only ~5.8 m, a short
+           dense sheet from bucket to splash instead of a long
+           faint one broken up by the grove trunks; heli, bucket,
+           falling water and splash all read at once in one
+           column. The searchlight pool narrows to 2.4 so its
+           warm shaft hugs the stream instead of washing it into
+           a broad white slab (staging hook, this scene only). */
+        /* BUCKET FIX: y 13.0 (was 14.5) — rim at y ~5.8, floor
+           ~4.3, sheet ~4.2 m: the bucket hangs LOW in front of
+           the flame wall / smoke backdrop (dark cable silhouettes
+           against the flames, orange bucket pops against smoke
+           and charred trunks, white sheet over dark charred
+           ground) instead of floating in empty dusk sky. */
+        h.x = 369; h.z = -401; h.y = 13.0; h.heading = -Math.PI / 2;
+        h.tx = 369; h.tz = -401;
+        if (CoralPolice.searchlight) CoralPolice.searchlight.poolRadius = 3.6;
+        CoralPolice.dropping = 1.1;
+        CoralFire.splash(369, -401);
+        /* Player car below: dust pinned full + yawed wheels (as
+           staged), and at 19.45 its headlight shafts/pool are ON
+           via the vehicles3d dusk extras — no flag needed. */
+        if (car()) stageCarFx(car(), 0.5, false, 1);
+        /* H-B DENSITY (chase): a ground crew works the line in
+           the lower frame — two figures striding along the strip
+           with the fire, one crouched at the splash's edge, one
+           leaning at the player car — plus a command-post vehicle
+           queued behind the player car on its brakes, headlights
+           on in the dusk, dust hanging off it. */
+        /* FINAL RESTAGE: crew re-placed for the south camera —
+           striding the strip SOUTH of the line (camera side), one
+           crouched at the splash's south edge, one leaning at the
+           player car, one east along the wall; the command vehicle
+           queues west in the left mid-frame on its brakes. */
+        placeExtraPed(24, 361, -394.5, -1.2, 'stride', 1.1);
+        placeExtraPed(25, 386, -396.5, 1.35, 'stride', 2.8);
+        placeExtraPed(26, 365.5, -396.0, 2.2, 'crouch', 0.3);
+        placeExtraPed(27, 366.5, -391.5, 0, 'lean', 0.5);
+        placeExtraPed(28, 392, -403, -0.9, 'stride', 0.4);
+        placeExtraVehicle(356, -392, 0.35, 0.4, true, 0.5);
+        Coral3D.setTime(19.45);
+      }
       function poll() {
         var h = CoralPolice.heliState;
         if (Coral3D.stats().wanted !== 2) Coral3D.setWanted(2); // shunt creep guard
-        Coral3D.teleport(340, -410);
-        if (car()) { car().heading = -Math.PI / 2; car().speed = 6; }
+        Coral3D.teleport(365, -394);
+        if (car()) { car().heading = 0; car().speed = 6; }
         if (h.x >= 240) CoralPolice.dropping = 1.1; // stream alive through the window
         // G-A window: heli at x 368..382 — near-directly over the
         // weakened kh3 point (375,-412), splash between the two
         // large flanking staging fires.
         if (h.y > 25 && h.z < -390 && h.x >= 368 && h.x <= 382) {
-          CoralPolice.dropping = 1.1; // bucket stream renders while > 0
-          CoralFire.splash(h.x, h.z);
-          Coral3D.setTime(17.5);
+          chaseTableau();
           return freeze();
         }
         if (Date.now() - t0 > 60000) { // window missed twice over: take the run as-is
           window.__shotNote = 'karhutla window timed out at heli x=' + Math.round(h.x) + ' z=' + Math.round(h.z);
-          CoralPolice.dropping = 1.1;
-          CoralFire.splash(h.x, h.z);
-          Coral3D.setTime(17.5);
+          chaseTableau();
           return freeze();
         }
         return delay(200).then(poll);
@@ -664,8 +1016,8 @@
     // (E5): its steps line is the hook's real guard spawn alone —
     // placeCrowd reuses crowd peds[0..], which the guards live in.
     placeCrowd([
-      [-190, 179, Math.PI / 2], [-190, 196, Math.PI / 2],
-      [-192, 184, Math.PI / 2], [-192, 191, Math.PI / 2]
+      [-190, 179, Math.PI / 2, 'aim', [-211, 187.5]], [-190, 196, Math.PI / 2, 'aim', [-211, 187.5]],
+      [-192, 184, Math.PI / 2, 'crouch'], [-192, 191, Math.PI / 2, 'stride']
     ]);
   }
 
@@ -685,8 +1037,26 @@
       placeTraffic(2, 525, -125, 525, 0, 105, 1); // beach avenue, z ~ -20 ahead-left
       placeTraffic(3, 525, 0, 525, 125, 62, 1);  // beach avenue southbound, z ~ 62
       placeTraffic(4, 525, 0, 525, 125, 80, -1); // beach avenue northbound, z ~ 45
+      /* G-C: backdrop traffic in motion, not parked props — the
+         oncoming car is mid-turn (steer held against traffic
+         update's decay), the southbound car brakes for the junction,
+         the seafront car trails a little dust. */
+      var tcx = Coral3D.traffic.cars;
+      if (tcx[1]) { tcx[1].steer = -0.45; tcx[1].steerHold = true; }
+      if (tcx[3]) tcx[3].brakeHold = true;
+      if (tcx[0]) tcx[0].dust = 0.55;
       placePeds([[534, 18], [536, 38], [533, 8], [537, 48], [520, -6],
                  [534, 28], [531, -20], [519, 44]]); // boardwalk + avenue strollers
+      /* H-B DENSITY (menu backdrop): the strollers are caught in
+         MOTION, not standing — half the boardwalk figures frozen
+         mid-stride with opposed phases, and two more traffic cars
+         join the seafront queue (one braking for the junction). */
+      var mp = Coral3D.crowd.peds;
+      posePed(mp[1], 'stride', 0.9); posePed(mp[3], 'stride', 2.5);
+      posePed(mp[5], 'stride', 1.7); posePed(mp[6], 'stride', 0.1);
+      placeTraffic(5, 375, 0, 525, 0, 88, 1);    // seafront queue, behind car 0
+      placeTraffic(6, 525, 0, 525, 125, 96, -1); // beach avenue, second northbound
+      if (Coral3D.traffic.cars[5]) Coral3D.traffic.cars[5].brakeHold = true;
       if (car()) car().speed = 11; // rolling behind the panel: ~40 KM/H
       Coral3D.setTime(17.8);
       Coral3D.state = 'pause'; // dashboard opens (menus3d also forces it for this shot)
@@ -713,11 +1083,11 @@
       Coral3D.teleport(-206, 187.5);
       if (car()) car().heading = -Math.PI / 2;
       var u = activeUnits();
-      placeUnit(u[0], -200, 176, -2.4);  // plaza NW, angled in
-      placeUnit(u[1], -200, 199, 2.4);   // plaza SW, angled in
-      placeUnit(u[2], -193, 168, -2.0);  // north steps corner
-      placeUnit(u[3], -193, 207, 2.0);   // south steps corner
-      if (u[4]) placeUnit(u[4], -216, 178, -Math.PI / 2 + 0.3); // avenue, frame-left foreground
+      placeUnitEx(u[0], -200, 176, -2.4, 0.48);  // plaza NW, angled in
+      placeUnitEx(u[1], -200, 199, 2.4, -0.48);   // plaza SW, angled in
+      placeUnitEx(u[2], -193, 168, -2.0, 0.4);  // north steps corner
+      placeUnitEx(u[3], -193, 207, 2.0, -0.4);   // south steps corner
+      if (u[4]) placeUnitEx(u[4], -216, 178, -Math.PI / 2 + 0.3, 0.5); // avenue, frame-left foreground
       // No placeCoupGuards() here (E5): the hook's real M9 guards
       // already hold the steps; staged crowd figures would displace
       // the very crowd peds the guards live in.
@@ -727,11 +1097,11 @@
       Coral3D.setTime(17.7);
       return delay(350).then(function () { // a beat in sight (SEARCHING clears)
         var u2 = activeUnits();
-        placeUnit(u2[0], -200, 176, -2.4);
-        placeUnit(u2[1], -200, 199, 2.4);
-        placeUnit(u2[2], -193, 168, -2.0);
-        placeUnit(u2[3], -193, 207, 2.0);
-        if (u2[4]) placeUnit(u2[4], -216, 178, -Math.PI / 2 + 0.3);
+        placeUnitEx(u2[0], -200, 176, -2.4, 0.48);
+        placeUnitEx(u2[1], -200, 199, 2.4, -0.48);
+        placeUnitEx(u2[2], -193, 168, -2.0, 0.4);
+        placeUnitEx(u2[3], -193, 207, 2.0, -0.4);
+        if (u2[4]) placeUnitEx(u2[4], -216, 178, -Math.PI / 2 + 0.3, 0.5);
         aimHeli(-206, 187.5, 18, -19.5);
         CoralPolice.heliState.y = 19;
         CoralPolice.heliState.heading = 2.4;
@@ -759,21 +1129,57 @@
     if (bc && bc.length >= 2) {
       bc[0].x = -204; bc[0].z = 182; bc[0].heading = 0.45; bc[0].speed = 0;
       bc[1].x = -204; bc[1].z = 193; bc[1].heading = Math.PI - 0.45; bc[1].speed = 0;
+      /* G-C: the roadblock cars hold under braking, wheels yawed
+         from the swing-in — brake glow burning at the plaza edge.
+         (The block officer between them already aims/tracks Mara
+         via police3d's own staging.) */
+      stageCarFx(bc[0], 0.5, true, 0);
+      stageCarFx(bc[1], -0.5, true, 0);
     }
     var u = activeUnits();
-    placeUnit(u[0], -199.5, 178, -2.5);  // plaza NW, mid-frame flank
-    placeUnit(u[1], -199.5, 197, 2.5);   // plaza SW, mid-frame flank
+    placeUnitEx(u[0], -199.5, 178, -2.5, 0.48);  // plaza NW, mid-frame flank
+    placeUnitEx(u[1], -199.5, 197, 2.5, -0.48);  // plaza SW, mid-frame flank
     var gp = Coral3D.crowd.peds;
+    /* G-C/G-B restage: the steps line is an ASSAULT in motion, not
+       a honour guard — two aim at Mara with real aimTargets, one
+       is crouched mid-steps, one advances mid-stride. */
     var line = [[-196, 181], [-196, 194], [-190.5, 184.5], [-190.5, 190.5]];
+    var poses = ['aim', 'aim', 'crouch', 'stride'];
+    var phases = [0.4, 0.8, 0.3, 2.6];
+    var maraPt = { x: -211, z: 187.5, y: 1.25 };
     [2, 5, 8, 11].forEach(function (pi, gi) {
       if (gp[pi] && line[gi]) {
         gp[pi].x = line[gi][0]; gp[pi].z = line[gi][1];
-        gp[pi].heading = Math.PI / 2; // face WEST, at Mara
-        gp[pi].speed = 0;
+        faceToward(gp[pi], -211, 187.5);
+        posePed(gp[pi], poses[gi], phases[gi], poses[gi] === 'aim' ? maraPt : undefined);
       }
     });
-    setStride(gp[2], 1.1);
-    setStride(gp[11], 2.6);
+    /* G-C: NEAR FOREGROUND on the steps axis — a crew figure's
+       shoulder at the camera's south edge, back to camera, aiming
+       east past Mara: the plaza foreground is no longer empty
+       flat ground between lens and steps. */
+    foregroundFigure(20, -211, 187.5, -Math.PI / 2, 3.1, 1.8, 'aim', { x: -203.5, z: 187.5, y: 1.1 });
+    /* H-B DENSITY (coup): the assault spreads across the plaza —
+       two figures stride in from the roadblock line toward the
+       steps, one leans at the plaza's north edge, one crosses
+       the south foreground in stride — and queued traffic stacks
+       on the plaza edges: an angkot and a second vehicle held on
+       their brakes at the NW/SW corners, wheels yawed. Indices
+       avoid the steps guards (2,5,8,11) and foreground (20). */
+    placeExtraPed(16, -206, 181.5, -1.35, 'stride', 1.6);
+    placeExtraPed(17, -206, 193.5, -1.75, 'stride', 0.3);
+    placeExtraPed(18, -201, 172.5, -2.6, 'lean', 0.5);
+    placeExtraPed(19, -209, 196.5, 0.9, 'stride', 2.4);
+    placeExtraPed(21, -197, 187.5, Math.PI / 2, 'crouch', 0.3, [-211, 187.5]);
+    placeExtraVehicle(-201.5, 170.5, -2.2, 0.45, true, 0.3);
+    placeExtraVehicle(-201.5, 204.5, 2.2, -0.45, true, 0);
+    /* Mara: firing pose at the backstop, plus a guaranteed burst
+       pair — a steps guard's tracer to Mara, her answer into the
+       backstop flank. */
+    setPose(Coral3D.mara, 'aim', { x: -203.5, z: 187.5, y: 1.1 });
+    if (Coral3D.mara) { Coral3D.mara.speed = 0; Coral3D.mara.walkPhase = 0.55; }
+    burst(gp[5], maraPt);
+    burst(Coral3D.mara, { x: -203.5, z: 187.5, y: 1.15 });
     // AIR ONE over the steps at (-184, 197.5) y=13: WEST of the
     // facade face (-183.6) — a mark behind the facade is inside
     // the 15 m main block and fully occluded from this camera —
@@ -797,12 +1203,18 @@
       // Her own car parks off-line on the plaza's north side.
       // Both static while she is on foot.
       placeBackstop(pickBackstop(), -203.5, 187.5, Math.PI / 2);
+      /* G-C: her own car swings into the mid-frame south side,
+         rear three-quarter to camera — brake glow glowing, front
+         wheels yawed (was parked plain on the north side). */
       if (Coral3D.allCars[0]) {
-        Coral3D.allCars[0].x = -206; Coral3D.allCars[0].z = 179.5;
-        Coral3D.allCars[0].heading = -Math.PI / 2 + 0.4; Coral3D.allCars[0].speed = 0;
+        Coral3D.allCars[0].x = -202.5; Coral3D.allCars[0].z = 192.8;
+        Coral3D.allCars[0].heading = -Math.PI / 2 + 0.35; Coral3D.allCars[0].speed = 0;
+        stageCarFx(Coral3D.allCars[0], 0.45, true, 0);
       }
       Coral3D.teleport(-211, 187.5);
       Coral3D.mara.heading = -Math.PI / 2;
+      window.__shotCam = { dist: 5.2, height: 2.05, lookY: 1.3 }; // foot-cam proposal, see cover note
+      setPose(Coral3D.mara, 'aim', { x: -203.5, z: 187.5, y: 1.1 });
       return waitVisible(4000);
     }).then(function () {
       Coral3D.teleport(-211, 187.5);
