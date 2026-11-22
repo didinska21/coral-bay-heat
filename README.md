@@ -24,12 +24,9 @@ mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
 ## Controls
 
-- **WASD / arrow keys** — move / drive
-- **Shift** — run
-- **E** — enter / exit a car
-- **Space** — handbrake in a car (fire on foot)
-- **Mouse** — aim / fire
-- **F** — punch
-- **H** — missions / activities
-- **P** — pause
-- **M** — mute
+- **WASD / arrow keys** — drive / move
+- **F** — enter / exit a car
+- **Space** — handbrake
+- **Shift** — run (on foot)
+- **Mouse / J** — fire (on foot)
+- **Esc / P** — pause

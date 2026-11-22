@@ -4,9 +4,9 @@
 // no packages), waits for game/src/shots3d.js to stage + freeze the
 // scene (window.__shotReady), logs window.__shotDescribe(), and saves
 // a 1280x720 JPEG. The three entry shots land in screenshots/; the
-// two 4th-shot candidates (4-menu, 4-alt) land in /tmp/f4r-candidates/
+// two 4th-shot candidates (4-menu, 4-alt) land in /tmp/f4r-candidates2/
 // for the coordinator to pick between. 768px-wide previews of all
-// five frames go to /tmp/f4r-previews/ (via python3/PIL).
+// five frames go to /tmp/f4r-previews2/ (via python3/PIL).
 // A quality loop guarantees every JPEG is <= 256 KiB.
 // Run: node tools/capture-shots.js [--shot 1-cover]
 const http = require('node:http');
@@ -16,8 +16,8 @@ const { spawn, execFileSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '../game');
 const shotsDir = path.resolve(__dirname, '../screenshots');
-const candDir = '/tmp/f4r-candidates';
-const prevDir = '/tmp/f4r-previews';
+const candDir = '/tmp/f4r-candidates2';
+const prevDir = '/tmp/f4r-previews2';
 const MAX_BYTES = 262144; // 256 KiB
 const onlyShot = process.argv.includes('--shot') ? process.argv[process.argv.indexOf('--shot') + 1] : null;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));

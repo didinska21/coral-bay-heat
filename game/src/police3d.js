@@ -84,10 +84,10 @@ var CoralPolice = (function () {
     }
     heliMesh = CoralBakers.heli(gl, 0xf2f4f6);
     var cb = new Baker();
-    cb.cone(0xfff2b0, { x: 0, y: 0, z: 0, r: 13, h: 38, seg: 12, emis: 0.55 });
+    cb.cone(0x3d331f, { x: 0, y: 0, z: 0, r: 6.5, h: 38, seg: 12, emis: 0.20 });
     coneMesh = cb.build(gl);
     var pb = new Baker();
-    pb.cylinder(0xfff6c4, { x: 0, y: 0, z: 0, r: 12, h: 0.12, seg: 14, emis: 0.8 });
+    pb.cylinder(0xa8945e, { x: 0, y: 0, z: 0, r: 4.2, h: 0.12, seg: 14, emis: 0.26 });
     poolMesh = pb.build(gl);
     var sb = new Baker();
     sb.plane(0x0a0c10, { x: 0, y: 0, z: 0, w: 11, d: 11, emis: 0 });
@@ -303,7 +303,7 @@ var CoralPolice = (function () {
       // additive searchlight cone + ground pool, depth-write off
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE);
-      R.draw(coneMesh, Mat4.compose(heliState.tx, 19, heliState.tz, 0, 0, 0), { noDepthWrite: true, noCull: true });
+      R.draw(coneMesh, Mat4.compose(heliState.tx, 19, heliState.tz, 0, 0, 0), { noDepthWrite: true });
       R.draw(poolMesh, Mat4.compose(heliState.tx, 0.1, heliState.tz, 0, 0, 0), { noDepthWrite: true });
       gl.disable(gl.BLEND);
     }

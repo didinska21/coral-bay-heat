@@ -203,6 +203,9 @@
       var spd = Math.abs(f.speed);
       dist = 10.5 + spd * 0.16; height = 4.9 + spd * 0.045; lookY = 1.7;
     } else { dist = 6.5; height = 2.8; lookY = 1.45; }
+    if (window.__shotCam && mode === 'car') { // screenshot staging override (shots3d.js)
+      dist = window.__shotCam.dist; height = window.__shotCam.height; lookY = window.__shotCam.lookY;
+    }
     var tx = f.x - fx * dist, tz = f.z - fz * dist;
     var k = snapCam ? 1 : 1 - Math.exp(-dt * 3.6);
     camPos[0] += (tx - camPos[0]) * k;

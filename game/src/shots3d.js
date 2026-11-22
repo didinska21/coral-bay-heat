@@ -63,6 +63,21 @@
     h.x = px + dx; h.z = pz + dz; h.y = 38;
     h.tx = px; h.tz = pz; // searchlight cone + pool on the player
   }
+  /* Place a live traffic car on the road-graph segment between the two
+     given intersections, s metres along it in direction dir (+1 a->b). */
+  function placeTraffic(i, ax, az, bx, bz, s, dir) {
+    var segs = CoralCity.roads.segments, tc = Coral3D.traffic.cars[i];
+    if (!tc) return;
+    for (var k = 0; k < segs.length; k++) {
+      var sg = segs[k];
+      if ((sg.ax === ax && sg.az === az && sg.bx === bx && sg.bz === bz) ||
+          (sg.ax === bx && sg.az === bz && sg.bx === ax && sg.bz === az)) {
+        tc.seg = k; tc.dir = dir; tc.s = s; tc.speed = 0;
+        CoralTraffic.sync(tc);
+        return;
+      }
+    }
+  }
   function freeze() {
     window.__shotFrozen = true;
     return delay(450).then(function () { window.__shotReady = true; });
@@ -87,8 +102,11 @@
 
   function stageCover() {
     Coral3D.startMission(1); // mission panel live (M1 First Fare)
-    Coral3D.teleport(375, 46); // Marina boulevard, avenue x=375
-    car().heading = 0; // north, camera settles behind looking down the boulevard
+    // Marina seafront street (z=0) heading EAST toward the beach/sea:
+    // low, tight chase cam with the shore filling the frame ahead.
+    window.__shotCam = { dist: 10.5, height: 3.6, lookY: 1.5 };
+    Coral3D.teleport(462, 0);
+    car().heading = -Math.PI / 2; // east, camera behind looking at the sea edge
     Coral3D.setTime(17.8); // golden hour
     return delay(900).then(function () {
       Coral3D.setWanted(4); // AIR ONE + 4 units
@@ -96,17 +114,22 @@
         return activeUnits().length >= 3 && CoralPolice.heliActive;
       }, 15000, 'cover heat');
     }).then(function () {
-      var u = activeUnits();
-      placeUnit(u[0], 370, 26, 0.25);
-      placeUnit(u[1], 381, 18, -0.2);
-      placeUnit(u[2], 368, 70, 0.1); // pursuer in the rear-view edge
-      placePeds([[384, 30], [387, 44], [383, 58], [388, 20], [385, 66]]);
-      Coral3D.setTime(17.8);
       // A few live ticks with units in sight of the player: the police
-      // update flips visible=true (response panel leaves SEARCHING) and
-      // AIR ONE's own orbit puts its searchlight cone on the player.
+      // update flips visible=true (response panel leaves SEARCHING).
       return delay(600);
     }).then(function () {
+      // Final placements (frame freezes immediately after, nothing drifts):
+      var u = activeUnits();
+      placeUnit(u[0], 478, -6, -Math.PI / 2 + 0.35);   // ahead-quarter, seaward lane
+      placeUnit(u[1], 461.5, 5.2, -Math.PI / 2 + 0.3);  // behind-quarter, right shoulder
+      placeUnit(u[2], 486, 5, -Math.PI / 2 - 0.3);      // second car ahead
+      aimHeli(462, 0, 19, -7);                           // AIR ONE upper frame, cone on player
+      CoralPolice.heliState.y = 13;
+      CoralPolice.heliState.heading = 2.2;
+      placeTraffic(0, 375, 0, 525, 0, 120, 1);  // eastbound ahead of the player
+      placeTraffic(1, 375, 0, 525, 0, 20, -1);  // westbound, oncoming lane
+      placePeds([[533, -14], [537, 6], [534, 18], [531, -26],   // boardwalk crowd
+                 [478, 10.5], [495, -10.5], [448, -10.5]]);      // near sidewalks
       Coral3D.setTime(17.8);
       return freeze();
     });
@@ -148,10 +171,17 @@
       if (car()) { car().heading = 0; car().speed = 9; }
       return CoralPolice.blockCars && CoralPolice.blockCars.length > 0;
     }, 45000, 'roadblock').then(function () {
+      // Close up on the real roadblock: player 27 m short of the two
+      // angled block cars, pursuit unit behind, AIR ONE cone overhead.
+      window.__shotCam = { dist: 9, height: 3.4, lookY: 1.6 };
+      var bc = CoralPolice.blockCars;
+      var bcx = (bc[0].x + bc[1].x) / 2, bcz = (bc[0].z + bc[1].z) / 2;
+      Coral3D.teleport(bcx, bcz + 27);
+      car().heading = 0;
       var u = activeUnits();
-      placeUnit(u[0], 219, -8, 0.15);
-      placeUnit(u[1], 232, -14, -0.15);
-      aimHeli(anchor.x, anchor.z, 14, 18);
+      placeUnit(u[0], bcx - 4, bcz + 40, 0.1);  // pursuit car behind
+      placeUnit(u[1], bcx + 5, bcz + 45, -0.1); // second pursuer
+      aimHeli(bcx, bcz + 27, 16, -18);
       if (car()) car().speed = 26; // ~94 km/h readout on the frozen HUD
       Coral3D.setTime(19.35);
       return freeze();
@@ -159,6 +189,8 @@
       // No roadblock in the window: still deliver the climax frame
       // (5 stars, AIR ONE cone, full response) and say so in describe.
       window.__shotNote = String(err && err.message || err);
+      window.__shotCam = { dist: 9, height: 3.4, lookY: 1.6 };
+      aimHeli(anchor.x, anchor.z, 16, -18);
       if (car()) car().speed = 26;
       return freeze();
     });
@@ -168,10 +200,18 @@
     // STATS over the live city: 3/5 missions, respect 60, money $2,050
     // -> completion = 36 + 15 + 9 = 60% by the menus3d formula.
     CoralMissions.restore({ money: 2050, respect: 60, completedCount: 3 });
-    Coral3D.teleport(300, 20);
-    if (car()) car().heading = 0;
-    Coral3D.setTime(16.6);
+    // Lively golden-hour backdrop: Marina seafront street heading east,
+    // player car + traffic + palms + peds behind the translucent panel.
+    window.__shotCam = { dist: 12, height: 5, lookY: 1.6 };
+    Coral3D.teleport(462, 0);
+    if (car()) car().heading = -Math.PI / 2;
+    Coral3D.setTime(17.8);
     return delay(700).then(function () {
+      placeTraffic(0, 375, 0, 525, 0, 120, 1);  // eastbound ahead
+      placeTraffic(1, 375, 0, 525, 0, 20, -1);  // westbound oncoming
+      placeTraffic(2, 375, 0, 525, 0, 140, 1);  // far eastbound near the shore
+      placePeds([[478, 10.5], [495, -10.5], [448, -10.5], [533, -14], [537, 6]]);
+      Coral3D.setTime(17.8);
       Coral3D.state = 'pause'; // menus3d shows the STATS panel
       return freeze();
     });
@@ -182,6 +222,11 @@
     car().heading = 0;
     Coral3D.setTime(6.7);
     return delay(900).then(function () {
+      // Dawn life: a northbound car ahead, a southbound car alongside,
+      // peds on both sidewalks (the city's parked row lines the kerbs).
+      placeTraffic(0, 375, -125, 375, 0, 55, -1); // northbound, ahead
+      placeTraffic(1, 375, -125, 375, 0, 95, 1);  // southbound, alongside
+      placePeds([[364.6, -48], [385.4, -58], [364.6, -70], [385.4, -20], [364.6, -14]]);
       if (car()) car().speed = 17; // rolling wide shot
       Coral3D.setTime(6.7);
       return freeze();
