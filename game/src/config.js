@@ -5,7 +5,7 @@ var GAME_CONFIG = {
   player: { walk: 4.5, run: 7.5, radius: 8 },
   /* Wanted table (03 + 07): escape timers per star, unit counts per star,
      spawn ring 140–200 m out of view, civilian reports mature in 4 s. */
-  police: { escape: [0, 8, 12, 16, 22, 28], counts: [0, 1, 2, 3, 4, 6], spawnMin: 140, spawnMax: 200, sight: 125, witness: 145, reportDelay: 4, incidentCooldown: 3, spawnInterval: 2, aimTime: 1.2, shotInterval: 2.4, arrestRadius: 48, arrestTime: 3, stillSpeed: 1.2, dirtMultiplier: 1.5, roadblockLife: 35 },
+  police: { escape: [0, 8, 12, 16, 22, 28], counts: [0, 1, 2, 3, 4, 6], spawnMin: 140, spawnMax: 200, sight: 125, witness: 145, reportDelay: 4, incidentCooldown: 3, spawnInterval: 2, aimTime: 1.2, shotInterval: 2.4, arrestRadius: 48, arrestTime: 3, stillSpeed: 1.2, dirtMultiplier: 1.5, roadblockLife: 35, heliMinStars: 4, heliSight: 170, heliFollow: 1.7, heliSpot: 26, heliOrbit: 58 },
   /* Combat tuning: one pistol, one pair of fists. Fire and punch have
      separate cooldowns; police shoot from star 3 after a visible aim. */
   combat: { health: 100, bulletSpeed: 320, bulletLife: 1.1, pistolDamage: 24, policeDamage: 9, enemyDamage: 12, fireInterval: 0.28, punchInterval: 0.55, punchRange: 22, punchDamage: 30, enemyHealth: 65, enemyRange: 100, enemySpeed: 6, flashLife: 0.12, hitLife: 0.22, knockback: 7 },

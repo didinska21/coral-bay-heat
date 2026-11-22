@@ -453,6 +453,75 @@ var CoralRender = (function () {
           });
         }
       }
+      /* AIR ONE (F3): spotlight and helicopter, drawn inside the world
+         transform after the night light pass so the pool punches through
+         the shade at night and reads as a faint circle by day. The cone
+         runs from the airframe to the lagged ground pool; the body is a
+         small top-down airframe with a spinning rotor disc. */
+      if (state.police && state.police.heli) {
+        var heli = state.police.heli;
+        var spotR = cfg.police.heliSpot;
+        var coneA = 0.05 + 0.10 * nightF;
+        var poolB = 0.10 + 0.22 * nightF;
+        var sdx = heli.spotX - heli.x, sdy = heli.spotY - heli.y;
+        var slen = Math.hypot(sdx, sdy) || 1;
+        var perpX = -sdy / slen, perpY = sdx / slen;
+        ctx.fillStyle = 'rgba(255,240,200,' + coneA + ')';
+        ctx.beginPath();
+        ctx.moveTo(heli.x, heli.y);
+        ctx.lineTo(heli.spotX + perpX * spotR, heli.spotY + perpY * spotR);
+        ctx.lineTo(heli.spotX - perpX * spotR, heli.spotY - perpY * spotR);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,244,205,' + poolB + ')';
+        ctx.beginPath(); ctx.ellipse(heli.spotX, heli.spotY, spotR, spotR * 0.72, 0, 0, TAU); ctx.fill();
+        ctx.fillStyle = 'rgba(255,244,205,' + (poolB * 0.7) + ')';
+        ctx.beginPath(); ctx.ellipse(heli.spotX, heli.spotY, spotR * 0.5, spotR * 0.36, 0, 0, TAU); ctx.fill();
+        /* Altitude shadow: offset from the airframe, soft and dark. */
+        ctx.fillStyle = 'rgba(10,18,18,0.18)';
+        ctx.beginPath(); ctx.ellipse(heli.x + 30, heli.y + 34, 20, 9, 0, 0, TAU); ctx.fill();
+        ctx.save();
+        ctx.translate(heli.x, heli.y);
+        ctx.rotate(heli.angle);
+        /* Skids: two dark lines either side of the fuselage. */
+        ctx.strokeStyle = '#101c22';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-14, -10); ctx.lineTo(14, -10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(-14, 10); ctx.lineTo(14, 10); ctx.stroke();
+        /* Tail boom extending back (-x) with a small fin. */
+        ctx.fillStyle = '#1d3a4d';
+        ctx.fillRect(-39, -2, 22, 4);
+        ctx.fillRect(-39, -6, 3, 12);
+        /* Tail rotor tick. */
+        ctx.strokeStyle = 'rgba(230,240,240,0.6)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(-38, -7); ctx.lineTo(-38, 7); ctx.stroke();
+        /* Fuselage with a white stripe and cockpit glass at the front. */
+        roundRect(-17, -7.5, 34, 15, 7, '#1d3a4d');
+        ctx.fillStyle = '#e8e4d2';
+        ctx.fillRect(-10, -2, 20, 4);
+        ctx.fillStyle = '#a9c7bf';
+        ctx.fillRect(9, -5, 7, 10);
+        /* Main rotor: translucent disc plus a blade line spinning fast
+           on elapsed time (deterministic, never Math.random). */
+        ctx.fillStyle = 'rgba(220,235,235,0.10)';
+        ctx.beginPath(); ctx.arc(0, 0, 24, 0, TAU); ctx.fill();
+        ctx.save();
+        ctx.rotate(state.elapsed * 31);
+        ctx.strokeStyle = 'rgba(230,240,240,0.35)';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-23, 0); ctx.lineTo(23, 0); ctx.stroke();
+        ctx.restore();
+        /* Red beacon blinking on the tail, white strobe at the nose. */
+        if (Math.sin(state.elapsed * 6) > 0) {
+          ctx.fillStyle = '#ff473e';
+          ctx.beginPath(); ctx.arc(-36, 0, 2.5, 0, TAU); ctx.fill();
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath(); ctx.arc(16, 0, 1.6, 0, TAU); ctx.fill();
+        ctx.restore();
+        text('AIR ONE', heli.x - 16, heli.y - 34, 8, '#ffe6b0', 800);
+      }
       ctx.restore();
       /* Mara: coral dot, pale face, and the chevron marker above her so the
          player is readable at a glance in every district. Drawn in screen

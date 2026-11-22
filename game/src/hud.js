@@ -100,6 +100,10 @@ var CoralHud = (function () {
           lastMarkers.push({ kind: 'police', x: u.x, y: u.y });
         });
         if (state.police.roadblock) dot(state.police.roadblock.x, state.police.roadblock.y, '#ff473e', 3);
+        if (state.police.heli) {
+          if (Math.sin(state.elapsed * 8) > -0.2) dot(state.police.heli.x, state.police.heli.y, '#7bd0ff', 2.5);
+          lastMarkers.push({ kind: 'heli', x: state.police.heli.x, y: state.police.heli.y });
+        }
       }
       dot(state.player.x, state.player.y, '#ffffff', 3);
       dot(state.player.x, state.player.y, GAME_CONFIG.palette.coral, 2);

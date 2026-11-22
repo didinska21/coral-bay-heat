@@ -18,7 +18,7 @@ var CoralPolice = (function () {
       stars: 0, floor: 0, finalStage: false, searching: false,
       escapeElapsed: 0, escapeDuration: 0, arrestElapsed: 0, visible: false,
       units: units, roadblock: null, lastKnown: null, cause: '',
-      incidents: 0, spawnLog: []
+      incidents: 0, spawnLog: [], heli: null
     };
 
     function sight(car, player) {
@@ -142,9 +142,67 @@ var CoralPolice = (function () {
 
     function update(dt, state) {
       var player = state.player;
+      /* AIR ONE: the helicopter joins at 4 stars and leaves when the heat
+         drops below that. It spawns off-screen on the seeded random so
+         replays stay deterministic, hovers on a slow orbit, and its
+         spotlight tracks with a slight lag — a lit player counts as seen,
+         so the escape clock cannot run down under it. Like the ground
+         units it searches the last known position when it cannot see the
+         player; only a fresh sighting (its own included) re-acquires the
+         player, otherwise no escape at 4–5 stars would ever be possible. */
+      if (api.stars >= cfg.heliMinStars && !api.heli) {
+        var heliAngle = random() * Math.PI * 2;
+        api.heli = {
+          x: player.x + Math.cos(heliAngle) * 240,
+          y: player.y + Math.sin(heliAngle) * 240,
+          angle: heliAngle + Math.PI,
+          spotX: player.x, spotY: player.y, leaving: false
+        };
+      }
+      if (api.heli && api.stars < cfg.heliMinStars && !api.heli.leaving) api.heli.leaving = true;
       var all = units.concat(api.roadblock ? [api.roadblock.car] : []);
-      api.visible = all.some(function (c) { return sight(c, player); });
+      function heliSight() {
+        return !!(api.heli && !api.heli.leaving &&
+          Math.hypot(api.heli.x - player.x, api.heli.y - player.y) < cfg.heliSight + cfg.heliOrbit &&
+          combat.clearLine(api.heli.x, api.heli.y, player.x, player.y));
+      }
+      var heliSees = heliSight();
+      api.visible = all.some(function (c) { return sight(c, player); }) || heliSees;
       if (api.visible) api.lastKnown = { x: player.x, y: player.y };
+      if (api.heli) {
+        if (api.heli.leaving) {
+          var awayAngle = Math.atan2(api.heli.y - player.y, api.heli.x - player.x);
+          api.heli.angle = awayAngle;
+          api.heli.x += Math.cos(awayAngle) * 140 * dt;
+          api.heli.y += Math.sin(awayAngle) * 140 * dt;
+          if (Math.hypot(api.heli.x - player.x, api.heli.y - player.y) > 380) api.heli = null;
+        } else {
+          var heliGoal = api.visible ? player : (api.lastKnown || player);
+          var orbitAngle = state.elapsed * 0.22;
+          var heliTx = heliGoal.x + Math.cos(orbitAngle) * cfg.heliOrbit;
+          var heliTy = heliGoal.y + Math.sin(orbitAngle) * cfg.heliOrbit;
+          var heliDx = heliTx - api.heli.x, heliDy = heliTy - api.heli.y;
+          var heliDist = Math.hypot(heliDx, heliDy);
+          if (heliDist > 0.01) {
+            var heliStep = Math.min(heliDist, 140 * dt);
+            api.heli.x += heliDx / heliDist * heliStep;
+            api.heli.y += heliDy / heliDist * heliStep;
+            api.heli.angle = Math.atan2(heliDy, heliDx);
+          } else {
+            api.heli.angle = Math.atan2(heliGoal.y - api.heli.y, heliGoal.x - api.heli.x);
+          }
+          /* The spotlight pool tracks the search goal — the player while
+             lit, the last known position while searching. */
+          var spotLerp = 1 - Math.exp(-3 * dt);
+          api.heli.spotX += (heliGoal.x - api.heli.spotX) * spotLerp;
+          api.heli.spotY += (heliGoal.y - api.heli.spotY) * spotLerp;
+          /* A heli that flies into sight range this frame counts at once. */
+          if (!api.visible && heliSight()) {
+            api.visible = true;
+            api.lastKnown = { x: player.x, y: player.y };
+          }
+        }
+      }
       /* Drain the crime queue: each incident needs a witness — a cop who
          sees it, or a living civilian close enough to report it in 4 s. */
       var incoming = events.splice(0, events.length);
@@ -247,6 +305,7 @@ var CoralPolice = (function () {
       units.length = 0;
       if (api.roadblock) remove(api.roadblock.car);
       api.roadblock = null;
+      api.heli = null;
       reports.length = 0;
       events.length = 0;
       lastCrime = {};
