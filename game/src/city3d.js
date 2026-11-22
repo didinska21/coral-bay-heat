@@ -1,418 +1,538 @@
-/* Coral Bay, full city (F4-S1). Replaces the S0 single-boulevard chunk
-   with a ~1200x900 m city: a road grid of 8 avenues (N-S) x 7 streets
-   (E-W), four districts (Port/Mangrove west, Downtown, Neon, Marina +
-   beach + water east), sidewalks, streetlamps, palms and broadleaf
-   trees, parked cars and beach props.
+/* city3d.js — Coral Bay: the full 3D city, baked into chunk meshes.
+   ~1200x900 m, 8x7 road grid, four district palettes west->east
+   (Port/Mangrove, Downtown, Neon, Marina) plus the eastern beach,
+   boardwalk and two-layer animated water. Static geometry is baked per
+   district x 3 z-bands (15 chunks) with frustum-sphere culling.
 
-   Static geometry is baked per district into { solid, glow } mesh
-   pairs: solid = buildings/roads/props; glow = everything emissive
-   (lit windows, lamp heads, neon signs) so main3d can scale its
-   brightness with the day cycle via GLCore.setEmisMul. Water is its
-   own mesh (animated by sliding). Sky is built per call so main3d
-   can rebuild it with lerped day-cycle colours (36 verts, cheap).
+   Exports:
+     window.CoralCity      — data + build/draw/day-cycle API (see bottom)
+     window.CoralBakers    — shared car + helicopter bakers other modules use
+   Seeded randomness only (SeededRandom, seed 7). No textures.
+*/
+'use strict';
 
-   The road network is exported as data on window.CoralCity:
-     { roads: { nodes:[{x,z,segs}], segments:[{a,b,ax,az,bx,bz,horiz}] },
-       bounds: {minX,maxX,minZ,maxZ}, districts: [...],
-       colliders: [{minX,maxX,minZ,maxZ}...] (building AABBs),
-       spawnPoints: { playerCar, parkedCars:[...] } }
-   Traffic (traffic3d), pedestrians (people3d), police and the
-   minimap (later sessions) all read that graph — never re-derive it.
+/* ------------------------------------------------------------- road graph */
+var AVENUES_X = [-525, -375, -225, -75, 75, 225, 375, 525];
+var STREETS_Z = [-375, -250, -125, 0, 125, 250, 375];
+var BOUNDS = { minX: -590, maxX: 590, minZ: -445, maxZ: 445 };
 
-   Heading convention (engine-wide): forward = (-sin h, -cos h),
-   h = 0 faces -z (north). Cars are modelled front = -z.
-   Deterministic: SeededRandom with a fixed seed. */
-var City3D = (function () {
-  var CAR_COLORS = ['#d94f3d', '#3d7bd9', '#f2b134', '#e8e8ec', '#37b06f', '#8e5bd6', '#22262b', '#ff7bac'];
-  var LIT = hexRgb('#ffd489');
-  var GLASS = hexRgb('#1d2a36');
+var DISTRICTS = [
+  { id: 'port', name: 'Port / Mangrove', minX: -590, maxX: -300 },
+  { id: 'downtown', name: 'Downtown', minX: -300, maxX: -60 },
+  { id: 'neon', name: 'Neon District', minX: -60, maxX: 190 },
+  { id: 'marina', name: 'Marina', minX: 190, maxX: 470 },
+  { id: 'beach', name: 'Coral Beach', minX: 470, maxX: 590 }
+];
+function districtAt(x) {
+  for (var i = 0; i < DISTRICTS.length; i++) if (x < DISTRICTS[i].maxX) return DISTRICTS[i];
+  return DISTRICTS[DISTRICTS.length - 1];
+}
 
-  var AVENUES = [-480, -360, -240, -120, 0, 120, 240, 360];   // x of N-S roads
-  var STREETS = [-360, -240, -120, 0, 120, 240, 360];          // z of E-W roads
-  var ROAD_HALF = 7;                                            // road half width
-  var BOUNDS = { minX: -590, maxX: 590, minZ: -445, maxZ: 445 };
-
-  var DISTRICTS = [
-    { id: 'port',     name: 'Port & Mangrove', minX: -600, maxX: -300 },
-    { id: 'downtown', name: 'Downtown',        minX: -300, maxX: -60 },
-    { id: 'neon',     name: 'Neon District',   minX: -60,  maxX: 180 },
-    { id: 'marina',   name: 'Marina',          minX: 180,  maxX: 470 },
-    { id: 'beach',    name: 'Coral Beach',      minX: 470,  maxX: 600 }
-  ];
-  function districtAt(x) {
-    for (var i = 0; i < DISTRICTS.length; i++) if (x >= DISTRICTS[i].minX && x < DISTRICTS[i].maxX) return DISTRICTS[i].id;
-    return 'beach';
+var Roads = (function () {
+  var nodes = [], segments = [];
+  var i, j;
+  for (i = 0; i < AVENUES_X.length; i++) for (j = 0; j < STREETS_Z.length; j++) {
+    nodes.push({ x: AVENUES_X[i], z: STREETS_Z[j], segs: [] });
   }
-
-  /* ---------- shared bakers (kept from S0, used by vehicles3d too) ---------- */
-
-  // A low-poly car baked into acc, origin at ground centre, front = -z.
-  function addCar(acc, colorHex, glassHex) {
-    var col = hexRgb(colorHex), glass = hexRgb(glassHex || '#1c2733'), dark = hexRgb('#14161a');
-    acc.add(Prim.box(1.9, 0.55, 4.3, col, 0), Mat4.compose(0, 0.62, 0, 0, 0, 0, 1, 1, 1));
-    acc.add(Prim.prism(1.1, 0.32, 1.86, col, 0), Mat4.compose(0, 0.86, -1.62, 0, -Math.PI / 2, 0, 1, 1, 1)); // hood slope (front)
-    acc.add(Prim.prism(0.9, 0.28, 1.86, col, 0), Mat4.compose(0, 0.86, 1.7, 0, Math.PI / 2, 0, 1, 1, 1));    // rear slope
-    acc.add(Prim.box(1.66, 0.52, 2.0, glass, 0), Mat4.compose(0, 1.14, 0.15, 0, 0, 0, 1, 1, 1));        // cabin
-    acc.add(Prim.box(1.74, 0.08, 2.1, col, 0), Mat4.compose(0, 1.44, 0.15, 0, 0, 0, 1, 1, 1));          // roof
-    var wheel = Prim.cylinder(0.37, 0.37, 0.26, 10, dark, 0);
-    var wm = function (x, z) { return Mat4.compose(x, 0.37, z, 0, 0, Math.PI / 2, 1, 1, 1); };
-    acc.add(wheel, wm(-0.88, -1.4)); acc.add(wheel, wm(0.88, -1.4));
-    acc.add(wheel, wm(-0.88, 1.4)); acc.add(wheel, wm(0.88, 1.4));
-    var light = Prim.panel(0.34, 0.14, hexRgb('#fff2b0'), 1);
-    acc.add(light, Mat4.compose(-0.6, 0.66, -2.16, 0, Math.PI, 0, 1, 1, 1));
-    acc.add(light, Mat4.compose(0.6, 0.66, -2.16, 0, Math.PI, 0, 1, 1, 1));
-    var tail = Prim.panel(0.34, 0.12, hexRgb('#ff3b30'), 1);
-    acc.add(tail, Mat4.compose(-0.6, 0.7, 2.16, 0, 0, 0, 1, 1, 1));
-    acc.add(tail, Mat4.compose(0.6, 0.7, 2.16, 0, 0, 0, 1, 1, 1));
-  }
-
-  // Helicopter body (no rotor) baked into acc, origin at body centre, nose -z.
-  function addHeliBody(acc, colorHex) {
-    var col = hexRgb(colorHex), dark = hexRgb('#14161a'), glass = hexRgb('#9fd4e8');
-    acc.add(Prim.box(2.2, 1.7, 3.6, col, 0), Mat4.compose(0, 0, -0.4, 0, 0, 0, 1, 1, 1));
-    acc.add(Prim.panel(1.8, 1.0, glass, 0.25), Mat4.compose(0, 0.15, -2.21, 0, Math.PI, 0, 1, 1, 1)); // windshield
-    acc.add(Prim.box(0.45, 0.45, 4.6, col, 0), Mat4.compose(0, 0.45, 3.4, 0, 0, 0, 1, 1, 1));             // tail boom along +z
-    acc.add(Prim.box(0.18, 1.1, 0.9, col, 0), Mat4.compose(0, 0.9, 5.6, 0, 0, 0, 1, 1, 1));               // tail fin
-    acc.add(Prim.box(0.5, 0.16, 0.5, dark, 0), Mat4.compose(0, 1.05, -0.4, 0, 0, 0, 1, 1, 1));           // mast
-    var skid = Prim.box(0.12, 0.12, 3.0, dark, 0);
-    acc.add(skid, Mat4.compose(-0.95, -1.25, -0.4, 0, 0, 0, 1, 1, 1));
-    acc.add(skid, Mat4.compose(0.95, -1.25, -0.4, 0, 0, 0, 1, 1, 1));
-    var strut = Prim.box(0.1, 0.5, 0.1, dark, 0);
-    acc.add(strut, Mat4.compose(-0.95, -0.95, -1.4, 0, 0, 0, 1, 1, 1));
-    acc.add(strut, Mat4.compose(0.95, -0.95, -1.4, 0, 0, 0, 1, 1, 1));
-    acc.add(strut, Mat4.compose(-0.95, -0.95, 0.6, 0, 0, 0, 1, 1, 1));
-    acc.add(strut, Mat4.compose(0.95, -0.95, 0.6, 0, 0, 0, 1, 1, 1));
-    var lamp = Prim.panel(0.5, 0.5, hexRgb('#fff6cc'), 1);
-    acc.add(lamp, Mat4.compose(0, -0.6, -2.21, 0, Math.PI, 0, 1, 1, 1)); // searchlight face
-  }
-
-  function addPalm(acc, x, z, rng, lean) {
-    var trunkCol = hexRgb('#8a6844'), frondCol = hexRgb('#2e9e5b'), darkFrond = hexRgb('#23804a');
-    var h = SeededRandom.range(rng, 4.6, 6.2);
-    var trunk = Prim.cylinder(0.14, 0.22, h, 6, trunkCol, 0);
-    acc.add(trunk, Mat4.compose(x, h / 2, z, lean, 0, lean * 0.6, 1, 1, 1));
-    var tx = x + Math.sin(lean * 0.6) * h * 0.4, tz = z + Math.sin(lean) * h * 0.4;
-    for (var i = 0; i < 5; i++) {
-      var a = i / 5 * Math.PI * 2 + rng() * 0.5;
-      var frond = Prim.box(0.34, 0.07, 2.7, i % 2 ? frondCol : darkFrond, 0);
-      var m = Mat4.multiply(
-        Mat4.translation(tx, h + 0.1, tz),
-        Mat4.multiply(Mat4.rotY(a), Mat4.multiply(Mat4.rotX(0.55), Mat4.translation(0, 0, 1.15))));
-      acc.add(frond, m);
-    }
-    acc.add(Prim.cylinder(0.3, 0.3, 0.3, 5, hexRgb('#6b4f30'), 0), Mat4.compose(tx, h - 0.05, tz, 0, 0, 0, 1, 1, 1));
-  }
-
-  function addBroadleaf(acc, x, z, rng) {
-    var h = SeededRandom.range(rng, 2.6, 3.6);
-    acc.add(Prim.cylinder(0.16, 0.24, h, 5, hexRgb('#6e5136'), 0), Mat4.compose(x, h / 2, z, 0, 0, 0, 1, 1, 1));
-    var g1 = hexRgb('#3f9e4d'), g2 = hexRgb('#357f42');
-    acc.add(Prim.cylinder(0.4, 2.3, 2.8, 6, g1, 0), Mat4.compose(x, h + 1.2, z, 0, rng() * 3, 0, 1, 1, 1));
-    acc.add(Prim.cylinder(0.3, 1.6, 2.0, 6, g2, 0), Mat4.compose(x + 0.7, h + 2.1, z + 0.3, 0, rng() * 3, 0, 1, 1, 1));
-  }
-
-  /* ---------- road graph ---------- */
-  function buildRoads() {
-    var nodes = [], segments = [], i, j;
-    var id = {};
-    for (i = 0; i < AVENUES.length; i++) for (j = 0; j < STREETS.length; j++) {
-      id[AVENUES[i] + ',' + STREETS[j]] = nodes.length;
-      nodes.push({ x: AVENUES[i], z: STREETS[j], segs: [] });
-    }
-    function seg(x1, z1, x2, z2) {
-      var a = id[x1 + ',' + z1], b = id[x2 + ',' + z2];
-      var s = { a: a, b: b, ax: x1, az: z1, bx: x2, bz: z2, horiz: z1 === z2, len: Math.hypot(x2 - x1, z2 - z1) };
-      segments.push(s);
-      nodes[a].segs.push(segments.length - 1);
-      nodes[b].segs.push(segments.length - 1);
-    }
-    for (j = 0; j < STREETS.length; j++) for (i = 0; i < AVENUES.length - 1; i++) seg(AVENUES[i], STREETS[j], AVENUES[i + 1], STREETS[j]);
-    for (i = 0; i < AVENUES.length; i++) for (j = 0; j < STREETS.length - 1; j++) seg(AVENUES[i], STREETS[j], AVENUES[i], STREETS[j + 1]);
-    return { nodes: nodes, segments: segments };
-  }
-
-  /* ---------- buildings ---------- */
-  // Windows go to the glow accumulator (lit) or solid (dark glass);
-  // faces: fx = ±1 → window wall faces ±x, fz = ±1 → faces ±z.
-  function addBuilding(solid, glow, x, z, w, d, h, colHex, rng, fx, fz, opts) {
-    var col = hexRgb(colHex);
-    var roof = hexRgb('#54463e');
-    solid.add(Prim.box(w, h, d, col, 0), Mat4.compose(x, h / 2, z, 0, 0, 0, 1, 1, 1));
-    solid.add(Prim.box(w * 0.66, 1.1, d * 0.66, roof, 0), Mat4.compose(x, h + 0.55, z, 0, 0, 0, 1, 1, 1));
-    var faces = [];
-    if (fx) faces.push({ axis: 'x', dir: fx });
-    if (fz) faces.push({ axis: 'z', dir: fz });
-    for (var fi = 0; fi < faces.length; fi++) {
-      var f = faces[fi];
-      var span = f.axis === 'x' ? d : w;
-      var cols = Math.max(2, Math.floor(span / 4.0)), rows = Math.max(2, Math.floor(h / 4.2));
-      var rotY = f.axis === 'x' ? (f.dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (f.dir > 0 ? 0 : Math.PI);
-      for (var r = 0; r < rows; r++) {
-        var wy = 2.0 + r * ((h - 3.4) / Math.max(1, rows - 1));
-        if (wy > h - 1.3) continue;
-        for (var c = 0; c < cols; c++) {
-          var off = -span / 2 + (c + 0.5) * (span / cols);
-          var lit = rng() < 0.42;
-          if (fi === 1 && !lit) continue; // second face: lit windows only (vertex budget)
-          var win = Prim.panel(1.5, 1.9, lit ? LIT : GLASS, lit ? 0.95 : 0.05);
-          var wx = f.axis === 'x' ? x + f.dir * (w / 2 + 0.04) : x + off;
-          var wz = f.axis === 'x' ? z + off : z + f.dir * (d / 2 + 0.04);
-          (lit ? glow : solid).add(win, Mat4.compose(wx, wy, wz, 0, rotY, 0, 1, 1, 1));
-        }
-      }
-    }
-    if (opts && opts.sign) { // Neon district signage: vertical bright panel
-      var signCols = ['#ff2e88', '#22d3ee', '#a3e635', '#facc15', '#f472b6', '#38bdf8'];
-      var sc = hexRgb(SeededRandom.pick(rng, signCols));
-      var sw = SeededRandom.range(rng, 1.6, 2.6), sh = Math.min(h * 0.7, SeededRandom.range(rng, 7, 15));
-      if (fx) glow.add(Prim.panel(sw, sh, sc, 1.35), Mat4.compose(x + fx * (w / 2 + 0.35), h * 0.52, z, 0, fx > 0 ? Math.PI / 2 : -Math.PI / 2, 0, 1, 1, 1));
-      if (fz) glow.add(Prim.panel(sh * 0.8, 1.6, sc, 1.35), Mat4.compose(x, h - 1.6, z + fz * (d / 2 + 0.35), 0, fz > 0 ? 0 : Math.PI, 0, 1, 1, 1));
-    }
-    if (opts && opts.awning) { // Marina storefront awning
-      solid.add(Prim.box(w * 0.9, 0.18, 2.6, hexRgb('#2aa198'), 0), Mat4.compose(x + (fx || 0) * (w / 2 + 1.1), 3.1, z + (fz || 0) * (d / 2 + 1.1), 0, 0, 0, 1, 1, 1));
-    }
-  }
-
-  function addCrane(solid, x, z, rotY) {
-    var col = hexRgb('#c8542e'), dark = hexRgb('#3a3f45');
-    var base = Mat4.compose(x, 0, z, 0, rotY, 0, 1, 1, 1);
-    function put(prim, m) { solid.add(prim, Mat4.multiply(base, m)); }
-    put(Prim.box(2.2, 30, 2.2, col, 0), Mat4.compose(0, 15, 0, 0, 0, 0, 1, 1, 1));
-    put(Prim.box(34, 1.6, 1.6, col, 0), Mat4.compose(8, 30.5, 0, 0, 0, 0, 1, 1, 1));
-    put(Prim.box(3, 3, 3, dark, 0), Mat4.compose(-7, 29.6, 0, 0, 0, 0, 1, 1, 1));
-    put(Prim.box(0.18, 9, 0.18, dark, 0), Mat4.compose(20, 25.5, 0, 0, 0, 0, 1, 1, 1));
-    put(Prim.box(2.6, 2.2, 2.6, hexRgb('#7a4a2b'), 0), Mat4.compose(20, 20, 0, 0, 0, 0, 1, 1, 1)); // hanging crate silhouette
-  }
-
-  /* ---------- main build ---------- */
-  function build(gl) {
-    var rng = SeededRandom.create(7);
-    var roads = buildRoads();
-    var colliders = [];
-    var chunks = []; // {solid, glow, cx, cz, r}
-    var i, j, k, x, z;
-
-    var PALETTES = {
-      port:     ['#9a8f7a', '#8b95a1', '#a39a86', '#7d8a96'],
-      downtown: ['#b0c4de', '#e6e0f0', '#9fb4c8', '#cfd8dc', '#a8c8c0'],
-      neon:     ['#2e2a3a', '#3a2f45', '#263238', '#43304f', '#37474f'],
-      marina:   ['#f2e3c9', '#e8b4a0', '#f0d060', '#e88ca0', '#f5f0e6', '#9fd8c9'],
-      beach:    ['#f2e3c9', '#e8b4a0']
-    };
-    var GROUND = { port: '#4c4a44', downtown: '#3c4043', neon: '#333038', marina: '#55584c', beach: '#55584c' };
-
-    // Ground: one tinted plane per district band (no full-map slab
-    // underneath — it doubled ground fill for zero visual gain).
-    var groundAcc = new Acc();
-    for (i = 0; i < DISTRICTS.length; i++) {
-      var dd = DISTRICTS[i];
-      if (dd.id === 'beach') continue;
-      groundAcc.add(Prim.plane(dd.maxX - dd.minX, 920, hexRgb(GROUND[dd.id]), 0),
-        Mat4.compose((dd.minX + dd.maxX) / 2, -0.03, 0, 0, 0, 0, 1, 1, 1));
-    }
-
-    // Roads + sidewalks + markings into the ground chunk (always drawn).
-    var asphalt = hexRgb('#26282c'), walkCol = hexRgb('#9a958c');
-    for (i = 0; i < AVENUES.length; i++) {
-      groundAcc.add(Prim.plane(ROAD_HALF * 2, 900, asphalt, 0), Mat4.compose(AVENUES[i], 0, 0, 0, 0, 0, 1, 1, 1));
-      var wk = Prim.box(3, 0.22, 900, walkCol, 0);
-      groundAcc.add(wk, Mat4.compose(AVENUES[i] - ROAD_HALF - 1.5, 0.11, 0, 0, 0, 0, 1, 1, 1));
-      groundAcc.add(wk, Mat4.compose(AVENUES[i] + ROAD_HALF + 1.5, 0.11, 0, 0, 0, 0, 1, 1, 1));
-    }
-    for (j = 0; j < STREETS.length; j++) {
-      groundAcc.add(Prim.plane(1180, ROAD_HALF * 2, asphalt, 0), Mat4.compose(-25, 0.005, STREETS[j], 0, 0, 0, 1, 1, 1));
-      var wk2 = Prim.box(1180, 0.22, 3, walkCol, 0);
-      groundAcc.add(wk2, Mat4.compose(-25, 0.11, STREETS[j] - ROAD_HALF - 1.5, 0, 0, 0, 1, 1, 1));
-      groundAcc.add(wk2, Mat4.compose(-25, 0.11, STREETS[j] + ROAD_HALF + 1.5, 0, 0, 0, 1, 1, 1));
-    }
-    var dashV = Prim.plane(0.35, 3.4, hexRgb('#e8c85a'), 0.22), dashH = Prim.plane(3.4, 0.35, hexRgb('#e8c85a'), 0.22);
-    for (i = 0; i < AVENUES.length; i++) for (var z = -444; z < 446; z += 9) groundAcc.add(dashV, Mat4.compose(AVENUES[i], 0.03, z, 0, 0, 0, 1, 1, 1));
-    for (j = 0; j < STREETS.length; j++) for (var x = -584; x < 470; x += 9) groundAcc.add(dashH, Mat4.compose(x, 0.03, STREETS[j], 0, 0, 0, 1, 1, 1));
-
-    // Streetlamps: poles into per-district solid (assigned later by x),
-    // heads into that district's glow. Collected flat, bucketed below.
-    var lampPoles = [], lampHeads = [];
-    function addLamp(lx, lz) {
-      lampPoles.push([lx, lz]);
-      lampHeads.push([lx, lz]);
-    }
-    for (i = 0; i < AVENUES.length; i++) for (z = -420; z <= 420; z += 56) addLamp(AVENUES[i] + (Math.round((z + 420) / 56) % 2 ? 8.6 : -8.6), z);
-    for (j = 0; j < STREETS.length; j++) for (x = -560; x <= 440; x += 56) addLamp(x, STREETS[j] + (Math.round((x + 560) / 56) % 2 ? 8.6 : -8.6));
-
-    // Per-district x per-z-band accumulators: chunks are small enough
-    // for real frustum culling (a whole-district chunk spans the full
-    // 940 m of z and can never be culled).
-    var BANDS = [[-470, -160], [-160, 160], [160, 470]];
-    function bandOf(z) { return z < -160 ? 0 : (z > 160 ? 2 : 1); }
-    var accs = {};
-    DISTRICTS.forEach(function (d) {
-      accs[d.id] = BANDS.map(function () { return { solid: new Acc(), glow: new Acc() }; });
+  function nodeIdx(ai, sj) { return ai * STREETS_Z.length + sj; }
+  function addSeg(a, b, horiz) {
+    var na = nodes[a], nb = nodes[b];
+    var idx = segments.length;
+    segments.push({
+      ax: na.x, az: na.z, bx: nb.x, bz: nb.z, horiz: horiz,
+      len: Math.hypot(nb.x - na.x, nb.z - na.z), nodes: [a, b]
     });
-    function accFor(x, z) { return accs[districtAt(x)][bandOf(z)]; }
-    var polePrim = Prim.cylinder(0.09, 0.13, 5.6, 6, hexRgb('#2c2f33'), 0);
-    var headPrim = Prim.box(0.5, 0.16, 0.9, hexRgb('#ffe9a8'), 1.15);
-    lampPoles.forEach(function (p) {
-      var a = accFor(p[0], p[1]);
-      a.solid.add(polePrim, Mat4.compose(p[0], 2.8, p[1], 0, 0, 0, 1, 1, 1));
-      a.glow.add(headPrim, Mat4.compose(p[0], 5.65, p[1], 0, 0, 0, 1, 1, 1));
-    });
-
-    // Blocks: 2x2 lots between roads. Buildings face the nearest road.
-    var buildingCount = 0;
-    for (i = 0; i < AVENUES.length - 1; i++) {
-      for (j = 0; j < STREETS.length - 1; j++) {
-        var bx0 = AVENUES[i] + ROAD_HALF + 3, bx1 = AVENUES[i + 1] - ROAD_HALF - 3;
-        var bz0 = STREETS[j] + ROAD_HALF + 3, bz1 = STREETS[j + 1] - ROAD_HALF - 3;
-        var dist = districtAt((bx0 + bx1) / 2);
-        for (var lx = 0; lx < 2; lx++) for (var lz = 0; lz < 2; lz++) {
-          if (rng() < (dist === 'port' ? 0.3 : 0.14)) { // empty lot: trees
-            var ex = bx0 + (lx + 0.5) * (bx1 - bx0) / 2, ez = bz0 + (lz + 0.5) * (bz1 - bz0) / 2;
-            for (k = 0; k < 3; k++) {
-              var tx = ex + SeededRandom.range(rng, -18, 18), tz = ez + SeededRandom.range(rng, -18, 18);
-              if (dist === 'marina' || dist === 'beach') addPalm(accFor(tx, tz).solid, tx, tz, rng, (rng() - 0.5) * 0.14);
-              else addBroadleaf(accFor(tx, tz).solid, tx, tz, rng);
-            }
-            continue;
-          }
-          var cx = bx0 + (lx + 0.5) * (bx1 - bx0) / 2 + SeededRandom.range(rng, -4, 4);
-          var cz = bz0 + (lz + 0.5) * (bz1 - bz0) / 2 + SeededRandom.range(rng, -4, 4);
-          var a2 = accFor(cx, cz);
-          var w, d, h;
-          if (dist === 'port') { w = SeededRandom.range(rng, 30, 44); d = SeededRandom.range(rng, 26, 40); h = SeededRandom.range(rng, 8, 14); }
-          else if (dist === 'downtown') { w = SeededRandom.range(rng, 22, 34); d = SeededRandom.range(rng, 22, 34); h = SeededRandom.range(rng, 28, 58); }
-          else if (dist === 'neon') { w = SeededRandom.range(rng, 20, 32); d = SeededRandom.range(rng, 20, 32); h = SeededRandom.range(rng, 13, 30); }
-          else { w = SeededRandom.range(rng, 18, 30); d = SeededRandom.range(rng, 18, 30); h = SeededRandom.range(rng, 8, 20); }
-          var fx = lx === 0 ? -1 : 1, fz = lz === 0 ? -1 : 1;
-          addBuilding(a2.solid, a2.glow, cx, cz, w, d, h, SeededRandom.pick(rng, PALETTES[dist]), rng, fx, fz,
-            { sign: dist === 'neon' && rng() < 0.75, awning: dist === 'marina' && rng() < 0.5 });
-          colliders.push({ minX: cx - w / 2, maxX: cx + w / 2, minZ: cz - d / 2, maxZ: cz + d / 2 });
-          buildingCount++;
-        }
-      }
-    }
-
-    // Marina beachfront row: low hotels/cafes at x~415 facing the sea.
-    for (z = -400; z <= 400; z += 58) {
-      if (rng() < 0.15) continue;
-      var mw = SeededRandom.range(rng, 20, 28), md = SeededRandom.range(rng, 30, 42), mh = SeededRandom.range(rng, 9, 17);
-      var mz = z + SeededRandom.range(rng, -5, 5), ma = accFor(415, mz);
-      addBuilding(ma.solid, ma.glow, 415, mz, mw, md, mh,
-        SeededRandom.pick(rng, PALETTES.marina), rng, 1, 0, { awning: rng() < 0.6 });
-      colliders.push({ minX: 415 - mw / 2, maxX: 415 + mw / 2, minZ: z - md / 2, maxZ: z + md / 2 });
-      buildingCount++;
-    }
-    // Port cranes (silhouettes) + container stacks.
-    addCrane(accFor(-520, -180).solid, -520, -180, 0.4); addCrane(accFor(-520, 40).solid, -520, 40, -0.3); addCrane(accFor(-505, 260).solid, -505, 260, 0.9);
-    var contCols = ['#b3543f', '#3f6fb3', '#3fb37a', '#b39a3f'];
-    for (i = 0; i < 14; i++) {
-      var qx = SeededRandom.range(rng, -575, -495), qz = SeededRandom.range(rng, -400, 400);
-      var ch = rng() < 0.4 ? 5.2 : 2.6;
-      accFor(qx, qz).solid.add(Prim.box(12, ch, 5, hexRgb(SeededRandom.pick(rng, contCols)), 0), Mat4.compose(qx, ch / 2, qz, 0, 0, 0, 1, 1, 1));
-      colliders.push({ minX: qx - 6, maxX: qx + 6, minZ: qz - 2.5, maxZ: qz + 2.5 });
-    }
-    // Mangrove clumps at the far west edge.
-    for (i = 0; i < 16; i++) {
-      var gx2 = SeededRandom.range(rng, -585, -560), gz2 = SeededRandom.range(rng, -430, 430);
-      addBroadleaf(accFor(gx2, gz2).solid, gx2, gz2, rng);
-    }
-
-    // Sidewalk palms (Marina/Neon avenues) + broadleafs elsewhere.
-    for (i = 0; i < AVENUES.length; i++) {
-      var dx = AVENUES[i];
-      for (z = -432; z <= 432; z += 30) {
-        if (rng() < 0.45) continue;
-        var px = dx + (rng() < 0.5 ? -9.3 : 9.3), pz = z + SeededRandom.range(rng, -3, 3);
-        var pd = districtAt(px);
-        if (pd === 'marina' || pd === 'neon') addPalm(accFor(px, pz).solid, px, pz, rng, (rng() - 0.5) * 0.14);
-        else addBroadleaf(accFor(px, pz).solid, px, pz, rng);
-      }
-    }
-
-    // Beach: sand, boardwalk, umbrellas, lifeguard towers. Sand and
-    // boardwalk span all bands — they go into the ground accumulator
-    // instead (always drawn, 24 verts); props are banded by z.
-    groundAcc.add(Prim.plane(150, 920, hexRgb('#e6cf9e'), 0), Mat4.compose(535, 0.01, 0, 0, 0, 0, 1, 1, 1));
-    groundAcc.add(Prim.box(14, 0.3, 920, hexRgb('#b08d5a'), 0), Mat4.compose(462, 0.15, 0, 0, 0, 0, 1, 1, 1)); // boardwalk
-    var umbCols = ['#ff5a5a', '#ffb340', '#3ec6d9', '#ff7bac'];
-    for (i = 0; i < 16; i++) {
-      var ux = SeededRandom.range(rng, 490, 560), uz = SeededRandom.range(rng, -420, 420);
-      var ba = accFor(ux, uz);
-      ba.solid.add(Prim.cylinder(0.06, 0.06, 2.2, 5, hexRgb('#e8e0d0'), 0), Mat4.compose(ux, 1.1, uz, 0, 0, 0, 1, 1, 1));
-      ba.solid.add(Prim.cylinder(0.1, 1.8, 0.5, 8, hexRgb(umbCols[i % 4]), 0), Mat4.compose(ux, 2.3, uz, 0, 0, 0, 1, 1, 1));
-    }
-    for (i = 0; i < 3; i++) { // lifeguard towers
-      var gx = 492, gz = -260 + i * 260, ba2 = accFor(gx, gz);
-      ba2.solid.add(Prim.box(3, 3.4, 3, hexRgb('#e8e0d0'), 0), Mat4.compose(gx, 1.7, gz, 0, 0, 0, 1, 1, 1));
-      ba2.solid.add(Prim.box(4.4, 0.3, 4.4, hexRgb('#d94f3d'), 0), Mat4.compose(gx, 3.6, gz, 0, 0, 0, 1, 1, 1));
-      colliders.push({ minX: gx - 1.5, maxX: gx + 1.5, minZ: gz - 1.5, maxZ: gz + 1.5 });
-    }
-
-    // Parked cars: data only — vehicles3d builds/draws them so the
-    // player can enter one. Placed along curbs on random segments.
-    var parkedCars = [];
-    var prng = SeededRandom.create(99);
-    for (i = 0; i < 26; i++) {
-      var s = roads.segments[Math.floor(prng() * roads.segments.length)];
-      var t = SeededRandom.range(prng, 0.15, 0.85);
-      var px2 = s.ax + (s.bx - s.ax) * t, pz2 = s.az + (s.bz - s.az) * t;
-      var dirx = (s.bx - s.ax) / s.len, dirz = (s.bz - s.az) / s.len;
-      var side = prng() < 0.5 ? 1 : -1;
-      var ox = -dirz * side * 5.4, oz = dirx * side * 5.4;
-      var head = Math.atan2(-dirx * (side > 0 ? 1 : -1), -dirz * (side > 0 ? 1 : -1));
-      parkedCars.push({ x: px2 + ox, z: pz2 + oz, heading: head, variant: SeededRandom.pick(prng, ['compact', 'sedan', 'suv', 'pickup']), color: SeededRandom.pick(prng, CAR_COLORS) });
-    }
-
-    // Bake chunks: one per district x z-band, with a bounding sphere
-    // (cx, cz, r) that main3d frustum-culls against every frame.
-    DISTRICTS.forEach(function (d) {
-      BANDS.forEach(function (band, bi) {
-        var a = accs[d.id][bi];
-        var solid = a.solid.build(gl), glow = a.glow.build(gl);
-        if (!solid.count && !glow.count) return;
-        chunks.push({
-          id: d.id + bi, cx: (d.minX + d.maxX) / 2, cz: (band[0] + band[1]) / 2,
-          r: Math.hypot((d.maxX - d.minX) / 2, (band[1] - band[0]) / 2) + 40,
-          solid: solid, glow: glow
-        });
-      });
-    });
-    var groundMesh = groundAcc.build(gl);
-
-    // Water: two layered planes east of the beach, slid by main3d.
-    var wacc = new Acc();
-    wacc.add(Prim.plane(200, 940, hexRgb('#2b7f9e'), 0.12), Mat4.compose(650, -0.25, 0, 0, 0, 0, 1, 1, 1));
-    wacc.add(Prim.plane(200, 940, hexRgb('#3598b8'), 0.1), Mat4.compose(650, -0.5, 0, 0, 0, 0, 1, 1, 1));
-    var waterMesh = wacc.build(gl);
-
-    var city = {
-      roads: roads, bounds: BOUNDS, districts: DISTRICTS, colliders: colliders,
-      spawnPoints: {
-        playerCar: { x: 240, z: 60, heading: 0, variant: 'sport', color: '#ff735d' },
-        parkedCars: parkedCars
-      }
-    };
-    window.CoralCity = city;
-
-    return { chunks: chunks, ground: groundMesh, water: waterMesh, buildings: buildingCount, city: city };
+    na.segs.push(idx); nb.segs.push(idx);
   }
-
-  // Sky: huge box, vertex colours lerped horizon->zenith, emissive 1.
-  // Rebuilt by main3d whenever the day-cycle colours move (36 verts).
-  function buildSky(gl, horizonHex, zenithHex) {
-    var skyPrim = Prim.box(1600, 1600, 1600, hexRgb('#ffffff'), 1);
-    var horizon = hexRgb(horizonHex), zenith = hexRgb(zenithHex);
-    for (var i = 0; i < skyPrim.p.length; i += 3) {
-      var t = Math.max(0, Math.min(1, skyPrim.p[i + 1] / 800 * 0.5 + 0.5));
-      t = Math.pow(Math.max(0, Math.min(1, (t - 0.42) / 0.35)), 0.7);
-      var ci = (i / 3) * 3;
-      skyPrim.c[ci] = horizon[0] + (zenith[0] - horizon[0]) * t;
-      skyPrim.c[ci + 1] = horizon[1] + (zenith[1] - horizon[1]) * t;
-      skyPrim.c[ci + 2] = horizon[2] + (zenith[2] - horizon[2]) * t;
-    }
-    var sacc = new Acc();
-    sacc.add(skyPrim, Mat4.identity());
-    return sacc.build(gl);
-  }
-
-  return { build: build, buildSky: buildSky, addCar: addCar, addHeliBody: addHeliBody, CAR_COLORS: CAR_COLORS, districtAt: districtAt };
+  for (j = 0; j < STREETS_Z.length; j++) for (i = 0; i < AVENUES_X.length - 1; i++) addSeg(nodeIdx(i, j), nodeIdx(i + 1, j), true);
+  for (i = 0; i < AVENUES_X.length; i++) for (j = 0; j < STREETS_Z.length - 1; j++) addSeg(nodeIdx(i, j), nodeIdx(i, j + 1), false);
+  return { nodes: nodes, segments: segments };
 }());
+
+/* ------------------------------------------------------- shared bakers */
+/* Car mesh: origin at ground centre, forward = -z (project heading
+   convention), so a model matrix with ry = heading drives it correctly. */
+function bakeCarInto(b, variant, colorHex) {
+  var dims = {
+    compact: { l: 3.6, w: 1.7, bh: 0.52, ch: 0.48 },
+    sedan: { l: 4.4, w: 1.8, bh: 0.55, ch: 0.5 },
+    suv: { l: 4.5, w: 1.95, bh: 0.78, ch: 0.62 },
+    pickup: { l: 4.9, w: 1.9, bh: 0.66, ch: 0.58 },
+    sport: { l: 4.3, w: 1.85, bh: 0.44, ch: 0.38 },
+    police: { l: 4.4, w: 1.8, bh: 0.55, ch: 0.5 }
+  }[variant] || { l: 4.4, w: 1.8, bh: 0.55, ch: 0.5 };
+  var col = colorHex, glass = 0x1b2634, tyre = 0x14171b;
+  var bodyY = 0.32 + dims.bh / 2;
+  var isPolice = variant === 'police';
+  if (isPolice) col = 0xf2f3f5;
+  b.box(col, { x: 0, y: bodyY, z: 0, w: dims.w, h: dims.bh, d: dims.l, top: shadeRGB(hexRGB(col), 1.08) });
+  if (isPolice) { // black bonnet + doors livery
+    b.panel(0x14171c, { x: 0, y: bodyY + 0.1, z: -dims.l / 2 + 0.55, w: dims.w + 0.04, h: dims.bh * 0.62, d: 1.0 });
+    b.panel(0x14171c, { x: -dims.w / 2 - 0.01, y: bodyY, z: 0.1, w: 0.04, h: dims.bh * 0.7, d: 1.7 });
+    b.panel(0x14171c, { x: dims.w / 2 + 0.01, y: bodyY, z: 0.1, w: 0.04, h: dims.bh * 0.7, d: 1.7 });
+  }
+  if (variant === 'pickup') { // open bed at the back, cab forward
+    b.box(col, { x: 0, y: bodyY + 0.12, z: dims.l / 2 - 0.5, w: dims.w, h: 0.28, d: 0.9, top: 0x2a2e33 });
+    b.box(glass, { x: 0, y: bodyY + dims.bh / 2 + dims.ch / 2 - 0.06, z: -0.55, w: dims.w * 0.86, h: dims.ch, d: 1.5 });
+    b.panel(col, { x: 0, y: bodyY + dims.bh / 2 + dims.ch - 0.08, z: -0.55, w: dims.w * 0.9, h: 0.07, d: 1.6 });
+  } else {
+    var cabZ = variant === 'suv' ? 0.15 : 0.28;
+    var cabD = variant === 'suv' ? dims.l * 0.52 : dims.l * 0.44;
+    b.box(glass, { x: 0, y: bodyY + dims.bh / 2 + dims.ch / 2 - 0.04, z: cabZ, w: dims.w * 0.84, h: dims.ch, d: cabD });
+    b.panel(col, { x: 0, y: bodyY + dims.bh / 2 + dims.ch - 0.06, z: cabZ, w: dims.w * 0.88, h: 0.07, d: cabD + 0.06 });
+  }
+  if (variant === 'sport') { // rear spoiler
+    b.panel(0x14171c, { x: -0.6, y: bodyY + dims.bh / 2 + 0.18, z: dims.l / 2 - 0.25, w: 0.08, h: 0.36, d: 0.08 });
+    b.panel(0x14171c, { x: 0.6, y: bodyY + dims.bh / 2 + 0.18, z: dims.l / 2 - 0.25, w: 0.08, h: 0.36, d: 0.08 });
+    b.panel(col, { x: 0, y: bodyY + dims.bh / 2 + 0.38, z: dims.l / 2 - 0.25, w: 1.5, h: 0.06, d: 0.34 });
+  }
+  var wy = 0.34, wz = dims.l / 2 - 0.72, wx = dims.w / 2 - 0.05;
+  [[-wx, -wz], [wx, -wz], [-wx, wz], [wx, wz]].forEach(function (p) {
+    b.cylinder(tyre, { x: p[0], y: wy, z: p[1], r: 0.34, h: 0.24, seg: 9, rz: Math.PI / 2 });
+  });
+  // headlights (front, -z) + taillights: high emissive so they read at night
+  b.panel(0xfff0bc, { x: -dims.w / 2 + 0.32, y: bodyY + 0.05, z: -dims.l / 2 - 0.02, w: 0.42, h: 0.13, d: 0.05, emis: 1.0 });
+  b.panel(0xfff0bc, { x: dims.w / 2 - 0.32, y: bodyY + 0.05, z: -dims.l / 2 - 0.02, w: 0.42, h: 0.13, d: 0.05, emis: 1.0 });
+  b.panel(0xff3b30, { x: -dims.w / 2 + 0.32, y: bodyY + 0.05, z: dims.l / 2 + 0.02, w: 0.42, h: 0.11, d: 0.05, emis: 0.85 });
+  b.panel(0xff3b30, { x: dims.w / 2 - 0.32, y: bodyY + 0.05, z: dims.l / 2 + 0.02, w: 0.42, h: 0.11, d: 0.05, emis: 0.85 });
+  if (isPolice) { // red/blue light bar
+    b.panel(0x14171c, { x: 0, y: bodyY + dims.bh / 2 + dims.ch + 0.05, z: 0.28, w: 1.15, h: 0.09, d: 0.4 });
+    b.panel(0xff2d40, { x: -0.29, y: bodyY + dims.bh / 2 + dims.ch + 0.16, z: 0.28, w: 0.55, h: 0.13, d: 0.36, emis: 1.0 });
+    b.panel(0x2d7bff, { x: 0.29, y: bodyY + dims.bh / 2 + dims.ch + 0.16, z: 0.28, w: 0.55, h: 0.13, d: 0.36, emis: 1.0 });
+  }
+  return b;
+}
+function bakeHeliInto(b, colorHex) {
+  var col = colorHex || 0xe8ecf0, glass = 0x18222e, dark = 0x22282f;
+  b.box(col, { x: 0, y: 0, z: 0.3, w: 1.7, h: 1.55, d: 3.1, top: shadeRGB(hexRGB(col), 1.07) });
+  b.prism(col, { x: 0, y: -0.1, z: -1.95, w: 1.55, h: 1.15, d: 1.1, h2: 0.35 });
+  b.panel(glass, { x: 0, y: 0.28, z: -2.42, w: 1.3, h: 0.78, d: 0.08, rx: -0.25 });
+  b.panel(0xff7847, { x: 0, y: -0.45, z: -0.9, w: 1.72, h: 0.3, d: 1.9 }); // coral cheatline
+  b.box(dark, { x: 0, y: 0.12, z: 3.6, w: 0.34, h: 0.34, d: 3.6 });          // tail boom
+  b.panel(col, { x: 0, y: 0.55, z: 5.35, w: 0.1, h: 1.15, d: 0.62 });        // tail fin
+  b.panel(dark, { x: 0.14, y: 0.5, z: 5.35, w: 0.05, h: 0.62, d: 0.14 });    // tail rotor hint
+  b.cylinder(dark, { x: -0.95, y: -1.05, z: 0.2, r: 0.06, h: 3.0, seg: 6, rx: Math.PI / 2 });
+  b.cylinder(dark, { x: 0.95, y: -1.05, z: 0.2, r: 0.06, h: 3.0, seg: 6, rx: Math.PI / 2 });
+  b.box(dark, { x: -0.8, y: -0.82, z: -0.5, w: 0.09, h: 0.5, d: 0.09 });
+  b.box(dark, { x: 0.8, y: -0.82, z: -0.5, w: 0.09, h: 0.5, d: 0.09 });
+  b.box(dark, { x: -0.8, y: -0.82, z: 1.0, w: 0.09, h: 0.5, d: 0.09 });
+  b.box(dark, { x: 0.8, y: -0.82, z: 1.0, w: 0.09, h: 0.5, d: 0.09 });
+  b.cylinder(dark, { x: 0, y: 0.95, z: 0.3, r: 0.16, h: 0.35, seg: 8 });     // rotor mast
+  return b;
+}
+var CoralBakers = {
+  /* bakeCar(gl, variant, colourHex) -> mesh. Variants: compact, sedan,
+     suv, pickup, sport, police. */
+  car: function (gl, variant, colour) { var b = new Baker(); bakeCarInto(b, variant, colour); return b.build(gl); },
+  /* bakeHeli(gl, colourHex) -> {body, rotor}; spin the rotor with ry. */
+  heli: function (gl, colour) {
+    var b = new Baker(); bakeHeliInto(b, colour);
+    var rb = new Baker();
+    rb.panel(0x1c2126, { x: 0, y: 0, z: 0, w: 7.6, h: 0.07, d: 0.34 });
+    rb.panel(0x1c2126, { x: 0, y: 0, z: 0, w: 0.34, h: 0.07, d: 7.6 });
+    rb.cylinder(0x333a42, { x: 0, y: 0, z: 0, r: 0.3, h: 0.16, seg: 8 });
+    return { body: b.build(gl), rotor: rb.build(gl) };
+  }
+};
+
+/* ------------------------------------------------------------- day cycle */
+var DAY_STOPS = [
+  { h: 0.0, sky: [0.04, 0.07, 0.17], hor: [0.13, 0.16, 0.29], fog: [0.09, 0.11, 0.21], sun: [0.30, 0.36, 0.52], amb: 0.34, emis: 2.0 },
+  { h: 5.0, sky: [0.04, 0.07, 0.17], hor: [0.13, 0.16, 0.29], fog: [0.09, 0.11, 0.21], sun: [0.30, 0.36, 0.52], amb: 0.34, emis: 2.0 },
+  { h: 7.0, sky: [0.34, 0.54, 0.84], hor: [0.99, 0.66, 0.42], fog: [0.86, 0.63, 0.49], sun: [0.95, 0.62, 0.38], amb: 0.46, emis: 1.05 },
+  { h: 10.0, sky: [0.29, 0.59, 0.95], hor: [0.74, 0.87, 0.98], fog: [0.71, 0.82, 0.91], sun: [1.02, 0.99, 0.92], amb: 0.56, emis: 0.45 },
+  { h: 16.5, sky: [0.29, 0.59, 0.95], hor: [0.74, 0.87, 0.98], fog: [0.71, 0.82, 0.91], sun: [1.02, 0.99, 0.92], amb: 0.56, emis: 0.45 },
+  { h: 18.3, sky: [0.31, 0.48, 0.84], hor: [1.00, 0.61, 0.31], fog: [0.90, 0.63, 0.44], sun: [1.08, 0.60, 0.29], amb: 0.48, emis: 0.95 },
+  { h: 19.8, sky: [0.11, 0.15, 0.37], hor: [0.54, 0.29, 0.37], fog: [0.29, 0.23, 0.33], sun: [0.42, 0.34, 0.44], amb: 0.37, emis: 1.7 },
+  { h: 21.0, sky: [0.04, 0.07, 0.17], hor: [0.13, 0.16, 0.29], fog: [0.09, 0.11, 0.21], sun: [0.30, 0.36, 0.52], amb: 0.34, emis: 2.0 },
+  { h: 24.0, sky: [0.04, 0.07, 0.17], hor: [0.13, 0.16, 0.29], fog: [0.09, 0.11, 0.21], sun: [0.30, 0.36, 0.52], amb: 0.34, emis: 2.0 }
+];
+function lerp3(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+var DayState = {
+  hour: 12, skyTop: [0.29, 0.59, 0.95], skyHorizon: [0.74, 0.87, 0.98], fog: [0.71, 0.82, 0.91],
+  sunDir: [0.3, 0.9, 0.3], sunColor: [1, 1, 0.92], ambient: [0.56, 0.56, 0.56], emisMul: 0.45, clear: [0.71, 0.82, 0.91]
+};
+function updateDay(hour) {
+  hour = ((hour % 24) + 24) % 24;
+  DayState.hour = hour;
+  var i = 0;
+  while (i < DAY_STOPS.length - 2 && DAY_STOPS[i + 1].h <= hour) i++;
+  var a = DAY_STOPS[i], b = DAY_STOPS[i + 1];
+  var t = Math.min(1, Math.max(0, (hour - a.h) / Math.max(0.0001, b.h - a.h)));
+  DayState.skyTop = lerp3(a.sky, b.sky, t);
+  DayState.skyHorizon = lerp3(a.hor, b.hor, t);
+  DayState.fog = lerp3(a.fog, b.fog, t);
+  DayState.clear = DayState.fog;
+  var amb = a.amb + (b.amb - a.amb) * t;
+  DayState.ambient = [amb, amb, amb * 1.02];
+  DayState.emisMul = a.emis + (b.emis - a.emis) * t;
+  // Sun arc: rises in the east (+x, over the sea), sets in the west.
+  var dayT = (hour - 6) / 12, ang = Math.PI * dayT;
+  var sx = Math.cos(ang), sy = Math.sin(ang) * 0.92 + 0.04, sz = 0.32;
+  var sunCol = lerp3(a.sun, b.sun, t);
+  if (sy > 0.10) {
+    var l = Math.hypot(sx, sy, sz);
+    DayState.sunDir = [sx / l, sy / l, sz / l];
+    DayState.sunColor = sunCol;
+  } else { // moonlight
+    var ml = Math.hypot(-0.4, 0.82, -0.3);
+    DayState.sunDir = [-0.4 / ml, 0.82 / ml, -0.3 / ml];
+    DayState.sunColor = [sunCol[0] * 0.55, sunCol[1] * 0.58, sunCol[2] * 0.7];
+  }
+  return DayState;
+}
+
+/* ------------------------------------------------------------ city build */
+var PALETTES = {
+  port: { walls: [0x8a7f72, 0x7d8a99, 0x9c8a6d, 0x6f7f7a, 0x96857a], roof: 0x59534a, ground: 0x8f8c84 },
+  downtown: { walls: [0x7fa3c0, 0x93a7b8, 0x6d87a0, 0xb0b8c0, 0x87b0cc], roof: 0x424a52, ground: 0x96938c },
+  neon: { walls: [0xd96c8a, 0x5fc2b8, 0xe0a83e, 0x8a6fd9, 0x4fa3d9, 0xe07a4e], roof: 0x4c4457, ground: 0x8e8a94 },
+  marina: { walls: [0xf2d5c4, 0xf7ead9, 0xcfe3d8, 0xf5c9c9, 0xd9e2f0], roof: 0xb5502f, ground: 0xa8a294 },
+  beach: { walls: [0xf7ead9, 0xf2d5c4, 0xfaf0dc], roof: 0xc25e35, ground: 0xe6cf9e }
+};
+var CAR_COLORS = [0xd94f3d, 0x3d7bd9, 0xf2b13d, 0x3fae6a, 0xe8e8ec, 0x30343a, 0x8a4fd9, 0x37b8c9, 0xd96cb0, 0x7a8894];
+var CAR_VARIANTS = ['compact', 'sedan', 'suv', 'pickup', 'sport'];
+var NEON_SIGNS = [0xff2d78, 0x00e5ff, 0xffea00, 0x76ff03, 0xff6d00, 0xb388ff];
+
+var CityBuild = {
+  chunks: [], colliders: [], parkedCars: [], carMeshCache: {},
+  skyMesh: null, waterA: null, waterB: null, foam: null, baseGround: null,
+  buildingCount: 0, lampCount: 0, treeCount: 0, built: false
+};
+
+function buildCity(gl) {
+  if (CityBuild.built) return CityBuild;
+  var rnd = SeededRandom.create(7);
+  var R = function (lo, hi) { return SeededRandom.range(rnd, lo, hi); };
+  var pick = function (arr) { return SeededRandom.pick(rnd, arr); };
+
+  // chunk bakers: 5 zones x 3 z-bands
+  var ZONES = DISTRICTS, BANDS = [[-445, -148], [-148, 148], [148, 445]];
+  var bakers = [], ci;
+  for (ci = 0; ci < 15; ci++) bakers.push(new Baker());
+  function chunkIdx(x, z) {
+    var zi = 0; while (zi < 4 && x >= ZONES[zi + 1].minX) zi++;
+    var bi = z < BANDS[0][1] ? 0 : (z < BANDS[1][1] ? 1 : 2);
+    return zi * 3 + bi;
+  }
+  function bk(x, z) { return bakers[chunkIdx(x, z)]; }
+
+  /* ground slabs per chunk */
+  for (var zi = 0; zi < 5; zi++) for (var bi = 0; bi < 3; bi++) {
+    var b = bakers[zi * 3 + bi], zn = ZONES[zi];
+    b.plane(PALETTES[zn.id].ground, {
+      x: (zn.minX + zn.maxX) / 2, y: 0, z: (BANDS[bi][0] + BANDS[bi][1]) / 2,
+      w: zn.maxX - zn.minX + 2, d: BANDS[bi][1] - BANDS[bi][0] + 2
+    });
+  }
+
+  /* roads, sidewalks, dashes, lamps */
+  var ASPHALT = 0x3a3f46, WALK = 0xb7b1a2, DASH = 0xd9d4ae;
+  Roads.segments.forEach(function (sg) {
+    var b = bk((sg.ax + sg.bx) / 2, (sg.az + sg.bz) / 2);
+    var cx = (sg.ax + sg.bx) / 2, cz = (sg.az + sg.bz) / 2;
+    var ry = sg.horiz ? Math.PI / 2 : 0; // plane local +z length axis -> align
+    // road slab (length along the segment direction)
+    if (sg.horiz) b.plane(ASPHALT, { x: cx, y: 0.03, z: cz, w: sg.len + 17, d: 17 });
+    else b.plane(ASPHALT, { x: cx, y: 0.03, z: cz, w: 17, d: sg.len + 17 });
+    // sidewalks: raised strips both sides
+    var offs = [-10.4, 10.4];
+    for (var s = 0; s < 2; s++) {
+      if (sg.horiz) b.box(WALK, { x: cx, y: 0.09, z: cz + offs[s], w: sg.len + 20, h: 0.18, d: 3.6 });
+      else b.box(WALK, { x: cx + offs[s], y: 0.09, z: cz, w: 3.6, h: 0.18, d: sg.len + 20 });
+    }
+    // centre dashes
+    var nDash = Math.floor(sg.len / 15);
+    for (var di = 1; di < nDash; di++) {
+      var t = di / nDash, dx = sg.ax + (sg.bx - sg.ax) * t, dz = sg.az + (sg.bz - sg.az) * t;
+      if (sg.horiz) b.plane(DASH, { x: dx, y: 0.05, z: dz, w: 3.2, d: 0.55, emis: 0.18 });
+      else b.plane(DASH, { x: dx, y: 0.05, z: dz, w: 0.55, d: 3.2, emis: 0.18 });
+    }
+    // streetlamps every ~52 m, alternating sides
+    var nLamp = Math.max(1, Math.floor(sg.len / 46));
+    for (var li = 0; li < nLamp; li++) {
+      var lt = (li + 0.5) / nLamp, lx = sg.ax + (sg.bx - sg.ax) * lt, lz = sg.az + (sg.bz - sg.az) * lt;
+      var side = (li % 2 === 0) ? 1 : -1;
+      var px = sg.horiz ? lx : lx + side * 11.4, pz = sg.horiz ? lz + side * 11.4 : lz;
+      var lb = bk(px, pz);
+      lb.cylinder(0x2c3138, { x: px, y: 2.6, z: pz, r: 0.09, h: 5.2, seg: 6 });
+      var hx = sg.horiz ? px : px - side * 1.1, hz = sg.horiz ? pz - side * 1.1 : pz;
+      lb.panel(0xffe2a8, { x: hx, y: 5.25, z: hz, w: 1.0, h: 0.14, d: 0.34, emis: 1.0 });
+      CityBuild.lampCount++;
+    }
+  });
+  // intersection squares
+  Roads.nodes.forEach(function (n) {
+    bk(n.x, n.z).plane(ASPHALT, { x: n.x, y: 0.04, z: n.z, w: 17.5, d: 17.5 });
+  });
+
+  /* trees: palms + broadleaf along streets, mangroves in the port */
+  function palm(b, x, z, s) {
+    var lean = R(-0.09, 0.09);
+    b.cylinder(0x8a6f4d, { x: x, y: 2.4 * s, z: z, r: 0.15, h: 4.8 * s, seg: 6, rz: lean });
+    var tx = x + lean * 4.4 * s, tz = z, ty = 4.9 * s;
+    for (var f = 0; f < 5; f++) {
+      var a = (f / 5) * Math.PI * 2 + R(0, 0.5);
+      b.panel(pick([0x3f9e4d, 0x4cb85c, 0x359544]), {
+        x: tx + Math.cos(a) * 1.15 * s, y: ty - 0.25 * s, z: tz + Math.sin(a) * 1.15 * s,
+        w: 2.5 * s, h: 0.07, d: 0.62, ry: -a, rz: Math.sin(a) * 0.42, rx: -Math.cos(a) * 0.42
+      });
+    }
+    CityBuild.treeCount++;
+  }
+  function broadleaf(b, x, z, s) {
+    b.cylinder(0x6e5136, { x: x, y: 1.3 * s, z: z, r: 0.17, h: 2.6 * s, seg: 6 });
+    var g = pick([0x4d8f3f, 0x5da34a, 0x3f7d38]);
+    b.box(g, { x: x, y: 3.4 * s, z: z, w: 2.6 * s, h: 2.0 * s, d: 2.6 * s, ry: R(0, 1) });
+    b.box(shadeRGB(hexRGB(g), 1.12), { x: x + 0.7 * s, y: 4.3 * s, z: z + 0.4 * s, w: 1.7 * s, h: 1.3 * s, d: 1.7 * s, ry: R(0, 1) });
+    CityBuild.treeCount++;
+  }
+  Roads.segments.forEach(function (sg) {
+    var n = Math.floor(sg.len / 27);
+    for (var i = 1; i < n; i++) {
+      if (rnd() < 0.42) continue;
+      var t = i / n, x = sg.ax + (sg.bx - sg.ax) * t, z = sg.az + (sg.bz - sg.az) * t;
+      var side = rnd() < 0.5 ? -13.4 : 13.4;
+      var px = sg.horiz ? x : x + side, pz = sg.horiz ? z + side : z;
+      var d = districtAt(px).id;
+      if (d === 'marina' || d === 'beach') palm(bk(px, pz), px, pz, R(0.85, 1.2));
+      else broadleaf(bk(px, pz), px, pz, R(0.8, 1.25));
+    }
+  });
+  for (var mg = 0; mg < 26; mg++) { // mangrove cluster, port south-west mud
+    var mx = R(-582, -492), mz = R(268, 428);
+    broadleaf(bk(mx, mz), mx, mz, R(1.0, 1.5));
+  }
+
+  /* buildings on the blocks between roads */
+  function windows(b, cx, cz, w, d, h, districtId) {
+    var litCols = [0xffd9a0, 0xcfe8ff, 0xfff3c9];
+    var faces = [
+      { n: [0, -1], len: w, off: -d / 2 - 0.06, along: 'x' },
+      { n: [0, 1], len: w, off: d / 2 + 0.06, along: 'x' },
+      { n: [-1, 0], len: d, off: -w / 2 - 0.06, along: 'z' },
+      { n: [1, 0], len: d, off: w / 2 + 0.06, along: 'z' }
+    ];
+    var rows = Math.max(1, Math.floor((h - 3) / 3.6));
+    faces.forEach(function (f) {
+      var cols = Math.max(1, Math.floor(f.len / 3.4));
+      for (var rI = 0; rI < rows; rI++) for (var cI = 0; cI < cols; cI++) {
+        var rv = rnd();
+        if (rv > 0.62) continue; // dark window: skip the quad entirely
+        var lit = rv < 0.42;
+        var along = -f.len / 2 + (cI + 0.5) * (f.len / cols);
+        var wy = 2.4 + rI * 3.6;
+        var colr = lit ? (districtId === 'neon' && rnd() < 0.3 ? pick(NEON_SIGNS) : pick(litCols)) : 0x1c2733;
+        var em = lit ? 0.9 : 0.0;
+        var wx = f.along === 'x' ? cx + along : cx + f.off;
+        var wz = f.along === 'x' ? cz + f.off : cz + along;
+        var ww = f.along === 'x' ? 1.45 : 0.06, wd = f.along === 'x' ? 0.06 : 1.45;
+        b.box(colr, { x: wx, y: wy, z: wz, w: ww, h: 1.8, d: wd, emis: em });
+      }
+    });
+  }
+  function building(cx, cz, w, d, h, districtId) {
+    var pal = PALETTES[districtId];
+    var wall = pick(pal.walls);
+    var b = bk(cx, cz);
+    b.box(wall, { x: cx, y: h / 2, z: cz, w: w, h: h, d: d, top: pal.roof });
+    b.panel(pal.roof, { x: cx, y: h + 0.18, z: cz, w: w * 0.5, h: 0.36, d: d * 0.5 }); // rooftop plant
+    if (districtId === 'downtown' && rnd() < 0.3) b.cylinder(0x9aa4ae, { x: cx + w * 0.22, y: h + 1.1, z: cz, r: 0.9, h: 2.2, seg: 8 });
+    windows(b, cx, cz, w, d, h, districtId);
+    if (districtId === 'neon' && rnd() < 0.45) { // emissive signage
+      var sc = pick(NEON_SIGNS), vert = rnd() < 0.5;
+      var sx = cx + (rnd() < 0.5 ? -(w / 2 + 0.15) : (w / 2 + 0.15));
+      if (vert) b.panel(sc, { x: sx, y: h * 0.55, z: cz, w: 0.1, h: Math.min(h * 0.7, 11), d: 1.6, emis: 1.0 });
+      else b.panel(sc, { x: sx, y: h * 0.72, z: cz, w: 0.1, h: 1.7, d: Math.min(w * 0.8, 9), emis: 1.0 });
+      b.panel(sc, { x: cx, y: h + 0.5, z: cz, w: w * 0.7, h: 0.5, d: 0.4, emis: 0.9 });
+    }
+    if ((districtId === 'marina' || districtId === 'beach') && rnd() < 0.55) { // striped awnings, east face
+      var nA = Math.max(2, Math.floor(w / 3));
+      for (var aI = 0; aI < nA; aI++) {
+        b.prism(aI % 2 ? 0xff6f61 : 0x2ec4b6, {
+          x: cx - w / 2 + (aI + 0.5) * (w / nA), y: 3.1, z: cz + d / 2 + 0.75,
+          w: w / nA - 0.15, h: 1.0, d: 1.6, h2: 0.15
+        });
+      }
+    }
+    CityBuild.colliders.push({ minX: cx - w / 2, maxX: cx + w / 2, minZ: cz - d / 2, maxZ: cz + d / 2 });
+    CityBuild.buildingCount++;
+  }
+  for (var bi = 0; bi < AVENUES_X.length - 1; bi++) for (var bj = 0; bj < STREETS_Z.length - 1; bj++) {
+    var x0 = AVENUES_X[bi] + 14.5, x1 = AVENUES_X[bi + 1] - 14.5;
+    var z0 = STREETS_Z[bj] + 14.5, z1 = STREETS_Z[bj + 1] - 14.5;
+    var midX = (x0 + x1) / 2, midZ = (z0 + z1) / 2;
+    var did = districtAt(midX).id;
+    if (did === 'port' && rnd() < 0.5) { // one big warehouse per port block
+      building(midX, midZ, (x1 - x0) * R(0.82, 0.95), (z1 - z0) * R(0.8, 0.92), R(7, 12), did);
+      continue;
+    }
+    var cols = 2, rows = 2;
+    for (var sxI = 0; sxI < cols; sxI++) for (var szI = 0; szI < rows; szI++) {
+      if (rnd() < 0.10) continue; // plaza / parking gap
+      var cellW = (x1 - x0) / cols, cellD = (z1 - z0) / rows;
+      var ccx = x0 + (sxI + 0.5) * cellW, ccz = z0 + (szI + 0.5) * cellD;
+      var bw = cellW * R(0.68, 0.94), bd = cellD * R(0.68, 0.94);
+      var bh = did === 'downtown' ? R(28, 58) : did === 'neon' ? R(13, 30) : did === 'port' ? R(7, 13) : R(8, 17);
+      if (ccx > 440) bh = R(7, 12); // beachfront row stays low
+      building(ccx + R(-1.5, 1.5), ccz + R(-1.5, 1.5), bw, bd, bh, did);
+    }
+    if (did !== 'port' && rnd() < 0.34) { // annex block filling a corner
+      var ax2 = rnd() < 0.5 ? x0 + 8 : x1 - 8, az2 = rnd() < 0.5 ? z0 + 8 : z1 - 8;
+      var ah = did === 'downtown' ? R(18, 34) : did === 'neon' ? R(10, 20) : R(7, 12);
+      building(ax2, az2, R(9, 13), R(9, 13), ah, did);
+    }
+  }
+
+  /* port: container yard along the west edge + 3 cranes */
+  var CONT = [0xb5502f, 0x2f6db5, 0x3f9e4d, 0xc7a23a, 0x7a4fd9, 0x8894a0];
+  for (var cy = 0; cy < 42; cy++) {
+    var kx = R(-580, -552), kz = -350 + cy * 16 + R(-3, 3), rot = rnd() < 0.5;
+    var kb = bk(kx, kz), lvl = 1 + Math.floor(rnd() * 3);
+    for (var lv = 0; lv < lvl; lv++) {
+      kb.box(pick(CONT), { x: kx, y: 1.3 + lv * 2.6, z: kz, w: rot ? 2.4 : 6.1, h: 2.6, d: rot ? 6.1 : 2.4 });
+    }
+    if (cy % 4 === 0) CityBuild.colliders.push({ minX: kx - 3.1, maxX: kx + 3.1, minZ: kz - 3.1, maxZ: kz + 3.1 });
+  }
+  [-210, -10, 190].forEach(function (cz2, ci2) {
+    var cxr = -520, cb = bk(cxr, cz2), jibRy = 0.5 + ci2 * 0.35;
+    cb.box(0xd97c2b, { x: cxr, y: 0.6, z: cz2, w: 7, h: 1.2, d: 7 });
+    cb.box(0xe08a35, { x: cxr, y: 13, z: cz2, w: 1.3, h: 25, d: 1.3 });
+    cb.box(0xe08a35, { x: cxr + Math.sin(jibRy) * 9, y: 25.6, z: cz2 + Math.cos(jibRy) * 9, w: 1.0, h: 1.0, d: 30, ry: jibRy });
+    cb.box(0x555c64, { x: cxr - Math.sin(jibRy) * 6, y: 25.2, z: cz2 - Math.cos(jibRy) * 6, w: 2.2, h: 2.0, d: 3.4, ry: jibRy });
+    var hx2 = cxr + Math.sin(jibRy) * 20, hz2 = cz2 + Math.cos(jibRy) * 20;
+    cb.box(0x333a42, { x: hx2, y: 19, z: hz2, w: 0.12, h: 12, d: 0.12 });
+    cb.box(pick(CONT), { x: hx2, y: 12.4, z: hz2, w: 6.1, h: 2.6, d: 2.4, ry: jibRy });
+    CityBuild.colliders.push({ minX: cxr - 3.5, maxX: cxr + 3.5, minZ: cz2 - 3.5, maxZ: cz2 + 3.5 });
+  });
+
+  /* beach: boardwalk, umbrellas, lifeguard towers (sand/water are separate) */
+  for (var bwI = 0; bwI < 3; bwI++) {
+    var bb = bakers[4 * 3 + bwI]; // beach zone bakers, all bands
+    var bz0 = BANDS[bwI][0], bz1 = BANDS[bwI][1];
+    bb.box(0xa97c50, { x: 535, y: 0.22, z: (bz0 + bz1) / 2, w: 7, h: 0.44, d: bz1 - bz0, top: 0xbb8c5c });
+  }
+  for (var um = 0; um < 30; um++) {
+    var ux = R(552, 580), uz = R(-420, 420), ub = bk(ux, uz);
+    ub.cylinder(0xe8e2d4, { x: ux, y: 1.1, z: uz, r: 0.05, h: 2.2, seg: 5 });
+    ub.cone(pick([0xff6f61, 0xffd13d, 0x2ec4b6, 0xff2d78]), { x: ux, y: 2.5, z: uz, r: 2.1, h: 0.9, seg: 8 });
+  }
+  [-230, 5, 235].forEach(function (lz) {
+    var lb2 = bk(548, lz);
+    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(function (p) {
+      lb2.cylinder(0xd8d2c2, { x: 548 + p[0] * 0.9, y: 1.6, z: lz + p[1] * 0.9, r: 0.09, h: 3.2, seg: 5 });
+    });
+    lb2.box(0xf5f1e6, { x: 548, y: 4.1, z: lz, w: 2.6, h: 2.0, d: 2.6, top: 0xff6f61 });
+    lb2.prism(0xff6f61, { x: 548, y: 5.6, z: lz, w: 3.2, h: 1.0, d: 3.2, h2: 0.2 });
+    lb2.panel(0x1b2634, { x: 549.35, y: 4.3, z: lz, w: 0.06, h: 1.0, d: 1.8 });
+    CityBuild.colliders.push({ minX: 546.6, maxX: 549.4, minZ: lz - 1.4, maxZ: lz + 1.4 });
+  });
+  for (var bp = 0; bp < 16; bp++) palm(bk(542, 0), 542 + R(-2, 2), R(-430, 430), R(0.9, 1.25));
+
+  /* parked cars along kerbs */
+  var usedSeg = {};
+  for (var pc = 0; pc < 26; pc++) {
+    var sg2 = Roads.segments[Math.floor(rnd() * Roads.segments.length)];
+    var key = Roads.segments.indexOf(sg2);
+    if (usedSeg[key] > 1) { pc--; continue; }
+    usedSeg[key] = (usedSeg[key] || 0) + 1;
+    var pt = R(0.2, 0.8), side2 = rnd() < 0.5 ? -6.2 : 6.2;
+    var px2 = sg2.ax + (sg2.bx - sg2.ax) * pt + (sg2.horiz ? 0 : side2);
+    var pz2 = sg2.az + (sg2.bz - sg2.az) * pt + (sg2.horiz ? side2 : 0);
+    var along = Math.atan2(-(sg2.bx - sg2.ax), -(sg2.bz - sg2.az)); // heading whose forward follows the segment
+    var hd = (side2 < 0) ? along + Math.PI : along;
+    CityBuild.parkedCars.push({
+      x: px2, z: pz2, heading: hd,
+      variant: pick(CAR_VARIANTS), color: pick(CAR_COLORS)
+    });
+  }
+
+  /* bake chunks + compute culling spheres */
+  for (ci = 0; ci < 15; ci++) {
+    var zn2 = ZONES[Math.floor(ci / 3)], bd2 = BANDS[ci % 3];
+    var ccx2 = (zn2.minX + zn2.maxX) / 2, ccz2 = (bd2[0] + bd2[1]) / 2;
+    CityBuild.chunks.push({
+      mesh: bakers[ci].build(gl),
+      cx: ccx2, cz: ccz2,
+      radius: Math.hypot((zn2.maxX - zn2.minX) / 2, (bd2[1] - bd2[0]) / 2) + 30
+    });
+  }
+
+  /* sky dome (unit-ish box, drawn at the camera, depth-pinned) */
+  var sb = new Baker();
+  sb.box(0xffffff, { x: 0, y: 0, z: 0, w: 1250, h: 1250, d: 1250 });
+  CityBuild.skyMesh = sb.build(gl);
+
+  /* base ground far beyond the city + the sea */
+  var gb = new Baker();
+  gb.plane(0x8b9077, { x: 0, y: -0.08, z: 0, w: 2600, d: 2400 });
+  CityBuild.baseGround = gb.build(gl);
+  var wa = new Baker();
+  wa.plane(0x1d729f, { x: 0, y: 0, z: 0, w: 620, d: 1500, emis: 0.10 });
+  CityBuild.waterA = wa.build(gl);
+  var wb2 = new Baker();
+  wb2.plane(0x2f9dc4, { x: 0, y: 0, z: 0, w: 620, d: 1500, emis: 0.16 });
+  CityBuild.waterB = wb2.build(gl);
+  var fb = new Baker();
+  fb.plane(0xeafaf2, { x: 0, y: 0, z: 0, w: 7, d: 1500, emis: 0.3 });
+  CityBuild.foam = fb.build(gl);
+
+  CityBuild.built = true;
+  return CityBuild;
+}
+
+/* ----------------------------------------------------------------- draw */
+var _chunkOrder = [];
+function drawCity(R, vp, camX, camZ, timeSec) {
+  var gl = R.gl;
+  var planes = CoralGL.frustumPlanes(vp);
+  var i, ch;
+  _chunkOrder.length = 0;
+  for (i = 0; i < CityBuild.chunks.length; i++) {
+    ch = CityBuild.chunks[i];
+    if (CoralGL.sphereVisible(planes, ch.cx, 20, ch.cz, ch.radius)) {
+      _chunkOrder.push({ ch: ch, d: (ch.cx - camX) * (ch.cx - camX) + (ch.cz - camZ) * (ch.cz - camZ) });
+    }
+  }
+  _chunkOrder.sort(function (a, b) { return a.d - b.d; }); // near-to-far
+  var I = Mat4.identity();
+  R.draw(CityBuild.baseGround, I);
+  for (i = 0; i < _chunkOrder.length; i++) R.draw(_chunkOrder[i].ch.mesh, I);
+  // sea: two layers sliding against each other for shimmer + foam edge
+  var wob = Math.sin(timeSec * 0.5) * 3;
+  R.draw(CityBuild.waterA, Mat4.compose(905, -0.5, wob, 0, 0, 0));
+  R.draw(CityBuild.waterB, Mat4.compose(905 + Math.sin(timeSec * 0.23) * 6, -0.22, -wob * 1.7, 0, 0, 0));
+  R.draw(CityBuild.foam, Mat4.compose(592 + Math.sin(timeSec * 0.8) * 1.6, 0.06, 0, 0, 0, 0));
+  // parked cars (shared cached meshes)
+  for (i = 0; i < CityBuild.parkedCars.length; i++) {
+    var p = CityBuild.parkedCars[i];
+    var dx = p.x - camX, dz = p.z - camZ;
+    if (dx * dx + dz * dz > 420 * 420) continue;
+    var key = p.variant + '_' + p.color;
+    var mesh = CityBuild.carMeshCache[key];
+    if (!mesh) { mesh = CoralBakers.car(gl, p.variant, p.color); CityBuild.carMeshCache[key] = mesh; }
+    R.draw(mesh, Mat4.compose(p.x, 0, p.z, 0, p.heading, 0));
+  }
+}
+
+/* --------------------------------------------------------------- exports */
+updateDay(12);
+var CoralCity = {
+  roads: Roads,
+  bounds: BOUNDS,
+  districts: DISTRICTS,
+  districtAt: districtAt,
+  colliders: CityBuild.colliders,
+  spawnPoints: {
+    playerCar: { x: 378, z: 84, heading: Math.PI },
+    parkedCars: CityBuild.parkedCars
+  },
+  day: DayState,
+  setHour: updateDay,
+  build: buildCity,
+  draw: drawCity,
+  buildInfo: CityBuild,
+  DAY_LENGTH_SEC: 600
+};
+window.CoralCity = CoralCity;
+window.CoralBakers = CoralBakers;
