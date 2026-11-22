@@ -188,6 +188,9 @@
 
     CoralTraffic.update(traffic, dt, focus);
     CoralPeople.updateCrowd(crowd, dt, focus.x, focus.z);
+    if (window.CoralPolice) CoralPolice.update(dt);
+    if (window.CoralCombat) CoralCombat.update(dt);
+    if (window.CoralMissions) CoralMissions.update(dt);
 
     /* camera */
     var f = focusEntity();
@@ -246,6 +249,9 @@
     CoralTraffic.draw(R, traffic, cam[0], cam[2]);
     CoralPeople.drawCrowd(R, crowd, cam[0], cam[2]);
     if (mode === 'foot' && !SMOKE) CoralPeople.draw(R, mara);
+    if (window.CoralPolice) CoralPolice.draw(R);
+    if (window.CoralCombat) CoralCombat.draw(R);
+    if (window.CoralMissions) CoralMissions.draw(R);
     var hp = heliPose(now / 1000);
     var heliModel = Mat4.compose(hp.x, hp.y, hp.z, 0, hp.heading, 0.10);
     R.draw(heli.body, heliModel);
@@ -293,7 +299,8 @@
     frames++; fpsClock += rawDt;
     if (fpsClock >= 0.5) { fps = Math.round(frames / fpsClock * 10) / 10; frames = 0; fpsClock = 0; }
 
-    if (!SMOKE) { // substep so slow frames still simulate in real time
+    var frozen = Coral3D.state === 'busted' || Coral3D.state === 'wasted' || Coral3D.state === 'pause';
+    if (!SMOKE && !frozen) { // substep so slow frames still simulate in real time
       var steps = Math.max(1, Math.ceil(dt / 0.05)), sdt = dt / steps;
       for (var si = 0; si < steps; si++) update(sdt);
     } else rotorAngle = 2.4;
@@ -326,6 +333,15 @@
       snapCam = true;
     },
     setTime: function (h) { timeHours = h; CoralCity.setHour(h); },
+    setWanted: function (n) { if (window.CoralPolice) CoralPolice.setWanted(n); },
+    startMission: function (i) { return window.CoralMissions ? CoralMissions.start(i) : false; },
+    objective: function () { return window.CoralMissions ? CoralMissions.objective() : null; },
+    startGame: function () { Coral3D.state = 'play'; },
+    reset: function () {
+      if (window.CoralPolice) CoralPolice.clear();
+      if (window.CoralCombat) CoralCombat.reset();
+      Coral3D.state = 'play';
+    },
     stats: function () {
       var f = focusEntity();
       return {
@@ -336,9 +352,16 @@
         traffic: traffic.cars.length, peds: crowd.peds.length,
         draws: lastDraws, tris: lastTris,
         district: CoralCity.districtAt(f.x).id, state: Coral3D.state,
-        wanted: 0, police: 0, heli: 1, searching: false,
-        mission: 0, missionState: 'none', money: 0, respect: 0,
-        health: 100, vehicle: mode === 'car' ? currentCar.variant : null,
+        wanted: window.CoralPolice ? CoralPolice.stars : 0,
+        police: window.CoralPolice ? CoralPolice.units.filter(function (u) { return u.active; }).length : 0,
+        heli: window.CoralPolice ? CoralPolice.heliActive : false,
+        searching: window.CoralPolice ? CoralPolice.searching : false,
+        mission: window.CoralMissions ? CoralMissions.activeNum() : 0,
+        missionState: window.CoralMissions ? CoralMissions.state : 'none',
+        money: window.CoralMissions ? CoralMissions.money : 0,
+        respect: window.CoralMissions ? CoralMissions.respect : 0,
+        health: window.CoralCombat ? CoralCombat.health : 100,
+        vehicle: mode === 'car' ? currentCar.variant : null,
         carsDriven: carsDriven
       };
     }

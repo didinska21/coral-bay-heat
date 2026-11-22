@@ -1,372 +1,346 @@
-/* Mission manager, 3D (F4-S2). The five-mission story chain adapted
-   from the 2D missions.js — same people and beats (Mara Voss, her
-   brother Tito, Aunt Sal — Salomé Reyes of The Gilded Gull casino —
-   and Detective Rourke), rebuilt for the 3D engine. Chain is strictly
-   sequential M1 -> M5. Objective forms used: drive-to point; pick up
-   a passenger (waits, walks to the car, rides) -> timed delivery;
-   collect 3 packages (drive-through); steal the marked car -> deliver
-   while wanted >= 2; a 5-gate timed checkpoint run; escape (lose the
-   wanted level); and the finale — Tito to the marina before the dawn
-   timer under 3-star pressure.
+/* missions3d.js — the 5-mission story chain for Coral Bay Heat 3D
+   (session F4R-S3, rebuild). All dialogue below is original to this
+   build, written for Mara Voss, her brother Tito, Salomé "Aunt Sal"
+   Reyes of The Gilded Gull, and Detective Rourke.
 
-   Rewards are money + respect; respect ranks: NOBODY -> RUNNER ->
-   WHEELMAN -> STREET NAME -> FIXER -> CORAL BAY LEGEND.
+   Chain (sequential, start is 1-based, only the next mission starts):
+     M1 "First Fare"     pier pickup, passenger walks to the car and
+                         boards, timed delivery to The Gilded Gull.
+                         $250, +20 respect.
+     M2 "Neon Errand"    collect 3 packages in the Neon district,
+                         then deliver. $600, +20.
+     M3 "Borrowed Wheels" steal the marked gold Sable (a specific
+                         parked car), deliver to a Port garage under
+                         a wanted floor of 2. $1,200, +20.
+     M4 "Mangrove Run"   5 timed checkpoints from a Port warehouse,
+                         then Rourke sets wanted 3 and the mission
+                         completes when the stars reach 0. $2,000, +20.
+     M5 "Gilded Sunrise" drive Tito to the marina within 240 s under
+                         a wanted floor of 3. $5,000, +20, story ends.
 
-   API: window.CoralMissions = { init(env), update(dt), draw(ctx, vp),
-     start(i), state(), index(), dialogue(), objective(),
-     objectiveText(), markedCar(), money, respect, rankName(),
-     storyComplete } */
+   A beacon (light pillar + floating chevron) marks the objective.
+   Exported: window.CoralMissions = {
+     money, respect, completedCount, storyComplete, state,
+     start(i), objective(), objectiveText(), dialogue(), rankName(),
+     activeName(), restore(save), update(dt), draw(R) }
+*/
+'use strict';
+
 var CoralMissions = (function () {
-  var REWARDS = [250, 600, 1200, 2000, 5000];
-  var RESPECT_PER = 20;
-  var RANKS = [
-    { at: 0, name: 'NOBODY' }, { at: 20, name: 'RUNNER' }, { at: 40, name: 'WHEELMAN' },
-    { at: 60, name: 'STREET NAME' }, { at: 85, name: 'FIXER' }, { at: 100, name: 'CORAL BAY LEGEND' }
+  var GULL = { x: 240, z: -120 };
+  var DEFS = [
+    { name: 'First Fare', reward: 250 },
+    { name: 'Neon Errand', reward: 600 },
+    { name: 'Borrowed Wheels', reward: 1200 },
+    { name: 'Mangrove Run', reward: 2000 },
+    { name: 'Gilded Sunrise', reward: 5000 }
   ];
-  /* Landmarks on road intersections (avenue x, street z) so every
-     objective sits on open road, never inside a building. */
-  var LM = {
-    workshop: { x: -240, z: 0 },     // Voss & Sons Motors, Downtown
-    gull:     { x: 240, z: -120 },   // The Gilded Gull casino, Marina edge
-    pawn:     { x: -120, z: 120 },   // Palmetto Pawn
-    sirena:   { x: 120, z: -240 },   // Casa Sirena, Neon District
-    crown:    { x: 240, z: 120 },    // Coral Crown valet
-    pier:     { x: 360, z: 0 },      // Boardwalk pier / marina
-    warehouse:{ x: 360, z: 240 },    // marina warehouse
-    downtown: { x: -120, z: -120 },
-    neon:     { x: 120, z: 120 }
-  };
-  var TITLES = ['First Fare', 'Neon Errand', 'Borrowed Wheels', 'Mangrove Run', 'Gilded Sunrise'];
+  var RANKS = [
+    { at: 0, name: 'NOBODY' }, { at: 20, name: 'RUNNER' },
+    { at: 40, name: 'WHEELMAN' }, { at: 60, name: 'STREET NAME' },
+    { at: 80, name: 'FIXER' }, { at: 100, name: 'CORAL BAY LEGEND' }
+  ];
+  var M2_PACKAGES = [{ x: 75, z: -125 }, { x: 75, z: 0 }, { x: 75, z: 125 }];
+  var M2_DELIVER = { x: 225, z: 250 };
+  var M3_GARAGE = { x: -375, z: -125 };
+  var M4_START = { x: -525, z: -250 };
+  var M4_GATES = [
+    { x: -375, z: -125 }, { x: -225, z: 0 }, { x: -75, z: -125 },
+    { x: 75, z: 0 }, { x: 225, z: -125 }
+  ];
+  var M5_DOCK = { x: 525, z: 125 };
 
-  var env = null, gl = null;
-  var completed = 0;              // missions finished (chain position)
-  var active = null;              // live mission state object
-  var dialogQueue = [], dialogLine = null, dialogT = 0;
-  var beaconMesh = null, chevMesh = null, pkgMesh = null;
-  var beaconT = 0;
+  var money = 0, respect = 0, completedCount = 0, storyComplete = false;
+  var active = null;            // {num, stage, timer, count, markedCar, rider}
+  var lines = [];               // {who, text, until}
+  var lineClock = 0;            // seconds; dialogue advances in update
+  var beaconMesh = null, chevMesh = null, inited = false;
+  var bobT = 0;
 
-  var api = { money: 0, respect: 0, storyComplete: false };
+  var api = {};
 
-  function say(who, text) { dialogQueue.push({ who: who, text: text }); }
-  function rankName() {
-    var name = RANKS[0].name;
-    for (var i = 0; i < RANKS.length; i++) if (api.respect >= RANKS[i].at) name = RANKS[i].name;
-    return name;
+  function say(who, text) {
+    var start = lines.length ? Math.max(lineClock, lines[lines.length - 1].until) : lineClock;
+    lines.push({ who: who, text: text, from: start, until: start + 5 });
   }
-  function makePed(skin, shirt, pants, x, z) {
-    return {
-      x: x, z: z, heading: 0, phase: 0, speed: 0, moving: 0,
-      parts: People3D.parts(gl, skin, shirt, pants),
-      state: 'wait', leaveT: 0
-    };
-  }
-  function walkPed(ped, tx, tz, dt, speed) {
-    var dx = tx - ped.x, dz = tz - ped.z, d = Math.hypot(dx, dz);
-    if (d < 0.4) { ped.moving = 0; return true; }
-    ped.heading = Math.atan2(-dx / d, -dz / d);
-    var step = Math.min(d, speed * dt);
-    ped.x += dx / d * step; ped.z += dz / d * step;
-    ped.phase += dt * 8.5; ped.moving = 1;
-    return d - step < 0.4;
+  function dialogue() {
+    while (lines.length && lineClock >= lines[0].until) lines.shift();
+    if (!lines.length) return null;
+    if (lineClock < lines[0].from) return null;
+    return { who: lines[0].who, text: lines[0].text };
   }
 
-  function init(e) {
-    env = e; gl = e.gl;
-    var a = new Acc();
-    a.add(Prim.cylinder(1.3, 1.3, 60, 10, hexRgb('#ff735d'), 1.5), Mat4.identity());
-    beaconMesh = a.build(gl);
-    var b = new Acc();
-    b.add(Prim.prism(1.5, 1.1, 0.5, hexRgb('#ffd489'), 1.8), Mat4.identity());
-    chevMesh = b.build(gl);
-    var c = new Acc();
-    c.add(Prim.box(0.85, 0.85, 0.85, hexRgb('#f2b134'), 1.7), Mat4.identity());
-    pkgMesh = c.build(gl);
+  function ensureInit() {
+    if (inited) return;
+    inited = true;
+    var gl = Coral3D.gl;
+    var bb = new Baker();
+    bb.cylinder(0xffc94d, { x: 0, y: 0, z: 0, r: 1.15, h: 46, seg: 10, emis: 0.9 });
+    beaconMesh = bb.build(gl);
+    var cb = new Baker();
+    cb.box(0xffc94d, { x: 0, y: 0, z: 0, w: 1.7, h: 0.5, d: 1.7, emis: 1 });
+    chevMesh = cb.build(gl);
   }
 
-  /* ---------- mission definitions (stage machines) ---------- */
-  // Stage: { type, x, z, r, text, time } — types: driveTo, board,
-  // collect (uses m.packages), steal, gates (uses m.gates), escape.
-  function buildMission(idx) {
-    var m = { idx: idx, stageIdx: 0, passenger: null, packages: null, gates: null, marked: null, failed: false };
-    if (idx === 1) {
-      say('SAL', "One weekend, Mara. Five little drives. Then Tito keeps his shop.");
-      say('TITO', "Loaner car is parked out front. Don't scratch it. Actually — scratch it, it's Sal's.");
-      m.passenger = makePed('#f2c79b', '#e67e22', '#34495e', LM.pier.x + 4, LM.pier.z + 3);
-      m.stages = [
-        { type: 'driveTo', x: LM.pier.x, z: LM.pier.z, r: 9, text: 'Pick up the fare at the Boardwalk pier' },
-        { type: 'board', text: 'Let the passenger get in' },
-        { type: 'driveTo', x: LM.gull.x, z: LM.gull.z, r: 9, time: 150, text: 'Deliver the fare to The Gilded Gull — timed' }
-      ];
-    } else if (idx === 2) {
-      say('SAL', 'Three packages, Mara. Palmetto Pawn, Downtown, the Neon District. Then Casa Sirena.');
-      say('TITO', "Sal's guards don't like sharing the road. Keep it clean.");
-      m.packages = [
-        { x: LM.pawn.x, z: LM.pawn.z, done: false },
-        { x: LM.downtown.x, z: LM.downtown.z, done: false },
-        { x: LM.neon.x, z: LM.neon.z, done: false }
-      ];
-      m.stages = [
-        { type: 'collect', r: 6, text: 'Collect the 3 packages' },
-        { type: 'driveTo', x: LM.sirena.x, z: LM.sirena.z, r: 9, time: 120, text: 'Deliver the packages to Casa Sirena — timed' }
-      ];
-    } else if (idx === 3) {
-      say('TITO', 'A gold Vantara Sable is sitting at the Coral Crown valet. Unlocked. Practically begging.');
-      say('MARA', "Borrowed. We're borrowing it. Say it with me.");
-      m.marked = Vehicles3D.create(gl, { x: LM.crown.x + 6, z: LM.crown.z - 14, heading: 0.4, variant: 'sport', color: '#f2b134' });
-      m.stages = [
-        { type: 'driveTo', x: LM.crown.x, z: LM.crown.z, r: 12, text: 'Reach the Coral Crown valet' },
-        { type: 'steal', text: 'Steal the gold Vantara Sable' },
-        { type: 'driveTo', x: LM.workshop.x, z: LM.workshop.z, r: 10, text: 'Deliver the Sable to Voss & Sons Motors — lose the cops or outrun them' }
-      ];
-    } else if (idx === 4) {
-      say('SAL', 'A case sits in the marina warehouse. Run the bay checkpoints, then bring it home.');
-      say('MARA', 'And the cops?');
-      say('SAL', "You'll figure it out. You always do.");
-      m.gates = [
-        { x: 120, z: 240 }, { x: -120, z: 120 }, { x: -240, z: -120 }, { x: 0, z: -240 }, { x: 240, z: -120 }
-      ];
-      m.gateIdx = 0;
-      m.stages = [
-        { type: 'driveTo', x: LM.warehouse.x, z: LM.warehouse.z, r: 10, text: 'Reach the marina warehouse' },
-        { type: 'gates', r: 10, time: 240, text: 'Checkpoint run — hit all 5 gates' },
-        { type: 'escape', text: 'Escape — lose your wanted level' }
-      ];
-    } else if (idx === 5) {
-      say('SAL', 'Tito goes to the marina before dawn, Mara. Then we\'re done. All of it.');
-      say('MARA', 'Then we\'re done. All of it.');
-      m.passenger = makePed('#8a5a34', '#f2b134', '#2c3e50', LM.workshop.x + 4, LM.workshop.z + 3);
-      m.stages = [
-        { type: 'driveTo', x: LM.workshop.x, z: LM.workshop.z, r: 10, text: 'Pick up Tito at Voss & Sons Motors' },
-        { type: 'board', text: 'Let Tito get in' },
-        { type: 'driveTo', x: LM.pier.x, z: LM.pier.z, r: 10, time: 240, text: 'Get Tito to the marina before dawn — the heat is on' }
-      ];
-    }
-    return m;
+  function makeRider(x, z, colors) {
+    var p = CoralPeople.createPerson(Coral3D.gl, colors, x, z, 0);
+    return { person: p, state: 'wait' }; // wait | walk | aboard | gone
   }
-
-  function onStageStart(m) {
-    var s = m.stages[m.stageIdx];
-    if (m.idx === 3 && s.type === 'driveTo' && m.stageIdx === 2) {
-      CoralPolice.setFloor(2);
-      CoralPolice.crime('steal');
-      say('TITO', 'You stole a Sable from the Crown? …Okay. I\'m not even mad. That\'s impressive.');
-    }
-    if (m.idx === 4 && s.type === 'escape') {
-      CoralPolice.setWanted(3);
-      say('ROURKE', 'VOSS. Pull over and this stays a conversation.');
-    }
-    if (m.idx === 5 && s.type === 'driveTo' && m.stageIdx === 2) {
-      CoralPolice.setFloor(3);
-      CoralPolice.setWanted(Math.max(3, CoralPolice.stars));
+  function updateRider(rider, dt) {
+    if (!rider || rider.state === 'aboard' || rider.state === 'gone') return;
+    var p = rider.person, car = Coral3D.vehicleInstance;
+    var pl = Coral3D.player;
+    var dx = pl.pos.x - p.x, dz = pl.pos.z - p.z;
+    var d = Math.sqrt(dx * dx + dz * dz);
+    if (rider.state === 'wait' && car && d < 26) rider.state = 'walk';
+    if (rider.state === 'walk') {
+      if (!car) { rider.state = 'wait'; return; }
+      var tx = car.x - p.x, tz = car.z - p.z;
+      var td = Math.sqrt(tx * tx + tz * tz);
+      if (td < 2.7) { rider.state = 'aboard'; onRiderAboard(); return; }
+      p.heading = Math.atan2(-tx, -tz);
+      p.speed = 3.4;
+      p.x += (tx / td) * p.speed * dt;
+      p.z += (tz / td) * p.speed * dt;
+      p.walkPhase += dt * 8;
+      CoralPeople.collidePerson(p);
+    } else p.speed = 0;
+  }
+  function onRiderAboard() {
+    if (!active) return;
+    if (active.num === 1 && active.stage === 'pickup') {
+      active.stage = 'deliver'; active.timer = 150;
+      say('Passenger', 'You Mara? Sal said you drive like the tide owes you money. The Gull — go.');
+    } else if (active.num === 5 && active.stage === 'pickup') {
+      active.stage = 'deliver'; active.timer = 240;
+      if (window.CoralPolice) { CoralPolice.setFloor(3); CoralPolice.setWanted(3); }
+      say('Tito', "I'm in. Whatever follows us, don't let it catch us.");
     }
   }
 
-  function finishMission(m) {
-    var reward = REWARDS[m.idx - 1];
-    api.money += reward;
-    api.respect += RESPECT_PER;
-    completed = m.idx;
-    if (m.passenger) { m.passenger.state = 'leave'; m.passenger.leaveT = 5; }
-    if (m.idx === 1) say('TITO', "One down, four to go. Sal's package is on the Gull.");
-    if (m.idx === 2) say('SAL', "The pistol's yours. Don't make me regret it.");
-    if (m.idx === 4) say('TITO', 'Two grand, and the whole city saw you vanish. Nice driving.');
-    if (m.idx === 5) {
-      api.storyComplete = true;
-      say('SAL', "Debt's paid. You're free.");
-      say('MARA', 'I was never yours, Sal. I was just passing through.');
+  function completeMission() {
+    var def = DEFS[active.num - 1];
+    money += def.reward;
+    respect += 20;
+    completedCount = active.num;
+    if (window.CoralPolice) CoralPolice.setFloor(0);
+    if (active.num === 5) {
+      storyComplete = true;
+      say('Aunt Sal', 'You did it, Mara. The bay runs on your name now.');
     }
-    say('MISSION PASSED', TITLES[m.idx - 1] + ' — +$' + reward + ' · RESPECT: ' + rankName());
-    CoralPolice.clearFloor();
     active = null;
   }
-
-  function failMission(m, why) {
-    say('MISSION FAILED', why + ' — try again.');
-    if (m.passenger && m.passenger.state !== 'ride') m.passenger = null;
-    CoralPolice.clearFloor();
+  function failMission(why) {
+    if (window.CoralPolice) CoralPolice.setFloor(0);
+    say('Mara', why);
     active = null;
   }
 
   function start(i) {
-    if (active || i !== completed + 1 || i < 1 || i > 5) return false;
-    active = buildMission(i);
-    onStageStart(active);
+    if (active) return false;
+    if (i !== completedCount + 1 || i < 1 || i > 5) return false;
+    ensureInit();
+    active = { num: i, stage: 'start', timer: 0, count: 0, markedCar: null, rider: null };
+    if (i === 1) {
+      active.stage = 'pickup';
+      active.rider = makeRider(360, 0, { shirt: 0xd96c33, pants: 0x2e4a67, skin: 0x6e4525 });
+      say('Mara', 'First fare of the day. Pier pickup, Gull dropoff — easy money.');
+    } else if (i === 2) {
+      active.stage = 'collect';
+      say('Aunt Sal', 'Three parcels tucked around Neon, Mara. Sealed. You never saw them, I never sent them.');
+    } else if (i === 3) {
+      active.stage = 'steal';
+      var cars = Coral3D.allCars, pick = null, k;
+      for (k = 1; k < cars.length; k++) if (cars[k].variant === 'sedan') { pick = cars[k]; break; }
+      if (!pick && cars.length > 1) pick = cars[1];
+      if (pick) {
+        pick.variant = 'sedan'; pick.color = 0xd4af37;
+        pick.mesh = CoralVehicles.meshFor(Coral3D.gl, 'sedan', 0xd4af37);
+        if (pick.parkedEntry) { pick.parkedEntry.variant = 'sedan'; pick.parkedEntry.color = 0xd4af37; }
+        active.markedCar = pick;
+      }
+      say('Tito', "Sis — there's a gold Sable parked out there with my name written all over it. Bring it home.");
+    } else if (i === 4) {
+      active.stage = 'toStart';
+      say('Mara', 'Warehouse run through the mangroves. Five gates, no stops, no mercy.');
+    } else if (i === 5) {
+      active.stage = 'pickup';
+      active.rider = makeRider(GULL.x, GULL.z, { shirt: 0x8f2f4f, pants: 0x1f2229, skin: 0xc98a5e });
+      say('Tito', 'Last ride, sis. Pick me up at the Gull — marina by sunrise, whatever it takes.');
+    }
     return true;
   }
 
-  function stageTarget(m, s) {
-    if (!s) return null;
-    if (s.type === 'collect') {
-      var best = null, bd = 1e9, p = env.player();
-      m.packages.forEach(function (pk) {
-        if (pk.done) return;
-        var d = Math.hypot(pk.x - p.x, pk.z - p.z);
-        if (d < bd) { bd = d; best = pk; }
-      });
-      return best;
-    }
-    if (s.type === 'steal') return m.marked ? { x: m.marked.x, z: m.marked.z } : null;
-    if (s.type === 'gates') return m.gates[m.gateIdx] || null;
-    if (s.type === 'board') {
-      var car = env.playerCar();
-      return { x: car.x, z: car.z };
-    }
-    if (s.type === 'escape') return null; // no marker — just lose the heat
-    return { x: s.x, z: s.z };
-  }
-
-  function update(dt) {
-    if (!env) return;
-    beaconT += dt;
-    /* Dialogue clock: 5 s per line, queued. */
-    if (dialogLine) { dialogT -= dt; if (dialogT <= 0) dialogLine = null; }
-    if (!dialogLine && dialogQueue.length) { dialogLine = dialogQueue.shift(); dialogT = 5; }
-
-    var p = env.player();
-    /* A delivered passenger walks off and despawns. */
-    if (!active && lastPassenger) {
-      updateLeaving(lastPassenger, dt);
-      if (lastPassenger.leaveT <= 0) lastPassenger = null;
-    }
-    if (!active) return;
-    var m = active, s = m.stages[m.stageIdx];
-    if (!s) { finishMission(m); return; }
-
-    /* Passenger behaviour while waiting / boarding / riding. */
-    if (m.passenger) {
-      var ped = m.passenger;
-      if (s.type === 'board' || (s.type === 'driveTo' && m.stageIdx === 0 && ped.state === 'wait' && p.mode === 'car')) {
-        // handled in stage logic below
-      }
-      if (ped.state === 'ride') {
-        var car0 = env.playerCar();
-        ped.x = car0.x; ped.z = car0.z;
-      }
-    }
-
-    if (s.time) {
-      s.time -= dt;
-      if (s.time <= 0) { failMission(m, 'Out of time'); return; }
-    }
-
-    if (s.type === 'driveTo') {
-      // M1/M5 first leg: arriving in the car starts the boarding.
-      if (m.passenger && m.passenger.state === 'wait' && m.stageIdx === 0 &&
-          Math.hypot(p.x - s.x, p.z - s.z) < s.r + 6) {
-        advance(m); return;
-      }
-      if (Math.hypot(p.x - s.x, p.z - s.z) < s.r) advance(m);
-    } else if (s.type === 'board') {
-      var ped2 = m.passenger, car = env.playerCar();
-      if (!ped2) { advance(m); return; }
-      if (p.mode === 'car') {
-        var doorX = car.x + Math.cos(car.heading) * -2.2, doorZ = car.z + -Math.sin(car.heading) * -2.2;
-        if (walkPed(ped2, doorX, doorZ, dt, 3.4)) { ped2.state = 'ride'; advance(m); }
-      } else ped2.moving = 0;
-    } else if (s.type === 'collect') {
-      var left = 0;
-      m.packages.forEach(function (pk) {
-        if (!pk.done && Math.hypot(p.x - pk.x, p.z - pk.z) < s.r) pk.done = true;
-        if (!pk.done) left++;
-      });
-      if (!left) advance(m);
-    } else if (s.type === 'steal') {
-      if (m.marked && env.playerCar() === m.marked) advance(m);
-    } else if (s.type === 'gates') {
-      var g = m.gates[m.gateIdx];
-      if (g && Math.hypot(p.x - g.x, p.z - g.z) < s.r) {
-        m.gateIdx++;
-        if (m.gateIdx >= m.gates.length) advance(m);
-      }
-    } else if (s.type === 'escape') {
-      if (CoralPolice.stars === 0) advance(m);
-    }
-  }
-  var lastPassenger = null;
-  function updateLeaving(ped, dt) {
-    ped.leaveT -= dt;
-    walkPed(ped, ped.x + 6, ped.z + 4, dt, 2.2);
-  }
-  function advance(m) {
-    m.stageIdx++;
-    if (m.stageIdx >= m.stages.length) {
-      if (m.passenger) { lastPassenger = m.passenger; m.passenger.state = 'leave'; m.passenger.leaveT = 5; }
-      finishMission(m);
-    } else onStageStart(m);
-  }
-
-  function draw(ctx, viewProj) {
-    if (!env) return;
-    var t = beaconT;
-    if (active) {
-      var m = active, s = m.stages[m.stageIdx];
-      var target = stageTarget(m, s);
-      if (target) {
-        var g = gl;
-        g.enable(g.BLEND); g.blendFunc(g.ONE, g.ONE); g.depthMask(false);
-        ctx.draw(beaconMesh, Mat4.compose(target.x, 30, target.z, 0, 0, 0, 1, 1, 1), viewProj, false);
-        g.depthMask(true); g.disable(g.BLEND);
-        var bob = 7 + Math.sin(t * 2.4) * 0.9;
-        ctx.draw(chevMesh, Mat4.compose(target.x, bob, target.z, Math.PI, t * 1.8, 0, 1, 1, 1), viewProj, false);
-      }
-      if (m.packages) {
-        m.packages.forEach(function (pk) {
-          if (pk.done) return;
-          ctx.draw(pkgMesh, Mat4.compose(pk.x, 1.1 + Math.sin(t * 3 + pk.x) * 0.25, pk.z, 0, t * 2, 0, 1, 1, 1), viewProj, false);
-        });
-      }
-      if (m.marked && env.playerCar() !== m.marked && env.parked().indexOf(m.marked) < 0) {
-        Vehicles3D.draw(ctx, viewProj, m.marked);
-      }
-      if (m.passenger && m.passenger.state !== 'ride') People3D.draw(ctx, viewProj, m.passenger);
-    } else if (lastPassenger) {
-      People3D.draw(ctx, viewProj, lastPassenger);
-    }
-  }
-
-  function state() {
-    if (active) return 'active';
-    return completed >= 5 ? 'done' : 'offer';
-  }
-  function index() { return active ? active.idx : 0; }
   function objective() {
     if (!active) return null;
-    var t = stageTarget(active, active.stages[active.stageIdx]);
-    return t ? { x: t.x, z: t.z } : null;
-  }
-  function objectiveText() {
-    if (!active) return completed >= 5 ? 'Story complete — Coral Bay is yours.' : 'Head to a mission: start M' + (completed + 1) + ' — ' + TITLES[completed];
-    var s = active.stages[active.stageIdx];
-    var txt = s ? s.text : '';
-    if (s && s.type === 'gates') txt += ' (' + (active.gateIdx + 1) + '/5)';
-    if (s && s.type === 'collect') {
-      var n = active.packages.filter(function (pk) { return pk.done; }).length;
-      txt += ' (' + n + '/3)';
+    var a = active;
+    if (a.num === 1) return a.stage === 'pickup' ? { x: 360, z: 0 } : { x: GULL.x, z: GULL.z };
+    if (a.num === 2) return a.stage === 'collect'
+      ? { x: M2_PACKAGES[a.count].x, z: M2_PACKAGES[a.count].z }
+      : { x: M2_DELIVER.x, z: M2_DELIVER.z };
+    if (a.num === 3) {
+      if (a.stage === 'steal' && a.markedCar) return { x: a.markedCar.x, z: a.markedCar.z };
+      return { x: M3_GARAGE.x, z: M3_GARAGE.z };
     }
-    if (s && s.time) txt += ' — ' + Math.max(0, Math.ceil(s.time)) + 's';
-    return txt;
-  }
-  function dialogue() { return dialogLine ? { who: dialogLine.who, text: dialogLine.text } : null; }
-  function markedCar() { return active && active.marked ? active.marked : null; }
-
-  /* F4-S3 save restore: money/respect/completed written back at boot
-     by save3d.js (CoralSave.load). Chain position only — no mission
-     is ever mid-flight across a reload. */
-  function restore(s) {
-    if (!s) return;
-    api.money = s.money | 0;
-    api.respect = s.respect | 0;
-    completed = Math.max(0, Math.min(5, s.completedCount | 0));
-    api.storyComplete = completed >= 5;
+    if (a.num === 4) {
+      if (a.stage === 'toStart') return { x: M4_START.x, z: M4_START.z };
+      if (a.stage === 'gates') return { x: M4_GATES[a.count].x, z: M4_GATES[a.count].z };
+      return null; // escape finale: no beacon, just lose the stars
+    }
+    if (a.num === 5) return a.stage === 'pickup' ? { x: GULL.x, z: GULL.z } : { x: M5_DOCK.x, z: M5_DOCK.z };
+    return null;
   }
 
-  api.init = init; api.update = update; api.draw = draw;
+  function objectiveText() {
+    if (!active) {
+      return completedCount >= 5 ? 'Story complete — free roam.' : 'No active mission.';
+    }
+    var a = active, t = Math.max(0, Math.ceil(a.timer));
+    if (a.num === 1) return a.stage === 'pickup'
+      ? 'Pick up the passenger at the Boardwalk pier.'
+      : 'Drive the passenger to The Gilded Gull — ' + t + 's.';
+    if (a.num === 2) return a.stage === 'collect'
+      ? 'Collect the packages (' + a.count + '/3) in the Neon district.'
+      : "Deliver the packages to Aunt Sal's drop in the Marina.";
+    if (a.num === 3) return a.stage === 'steal'
+      ? 'Steal the marked gold Sable.'
+      : 'Deliver the Sable to the Port garage — wanted floor 2.';
+    if (a.num === 4) {
+      if (a.stage === 'toStart') return 'Reach the Port warehouse to start the run.';
+      if (a.stage === 'gates') return 'Checkpoint ' + (a.count + 1) + '/5 — ' + t + 's.';
+      return 'Lose Detective Rourke — reach 0 stars.';
+    }
+    if (a.num === 5) return a.stage === 'pickup'
+      ? 'Pick up Tito at The Gilded Gull.'
+      : 'Drive Tito to the marina dock — ' + t + 's, wanted floor 3.';
+    return '';
+  }
+
+  function near(x, z, r) {
+    var p = Coral3D.player;
+    var dx = p.pos.x - x, dz = p.pos.z - z;
+    return dx * dx + dz * dz < r * r;
+  }
+  function inCar() { return Coral3D.player.mode === 'car'; }
+
+  function update(dt) {
+    if (!window.Coral3D || !Coral3D.gl) return;
+    ensureInit();
+    lineClock += dt;
+    bobT += dt;
+    if (!active) return;
+    var a = active;
+
+    if (a.rider) updateRider(a.rider, dt);
+
+    if (a.num === 1) {
+      if (a.stage === 'deliver') {
+        a.timer -= dt;
+        if (a.timer <= 0) { failMission('Fare walked. Sal hears everything — that one stings.'); return; }
+        if (inCar() && near(GULL.x, GULL.z, 9)) {
+          say('Aunt Sal', 'Clean run, Mara. Quick hands, quiet mouth — that is how you earn in Coral Bay.');
+          completeMission();
+        }
+      }
+    } else if (a.num === 2) {
+      if (a.stage === 'collect') {
+        var pk = M2_PACKAGES[a.count];
+        if (inCar() && near(pk.x, pk.z, 7.5)) {
+          a.count++;
+          if (a.count >= 3) { a.stage = 'deliver'; say('Mara', 'Three parcels, all sealed. Back to Sal.'); }
+          else say('Mara', 'Parcel ' + a.count + ' in the boot. ' + (3 - a.count) + ' to go.');
+        }
+      } else if (inCar() && near(M2_DELIVER.x, M2_DELIVER.z, 9)) {
+        say('Aunt Sal', 'All three, seals unbroken. You are wasted on fares, Mara.');
+        completeMission();
+      }
+    } else if (a.num === 3) {
+      if (a.stage === 'steal') {
+        if (a.markedCar && Coral3D.vehicleInstance === a.markedCar) {
+          a.stage = 'deliver';
+          if (window.CoralPolice) CoralPolice.setFloor(2);
+          say('Tito', "That's her! Gold and gorgeous. Garage in the Port — and the law will have opinions.");
+        }
+      } else if (inCar() && Coral3D.vehicleInstance === a.markedCar && near(M3_GARAGE.x, M3_GARAGE.z, 9)) {
+        say('Tito', 'Home safe. You drive like you were born in the fast lane, sis.');
+        completeMission();
+      }
+    } else if (a.num === 4) {
+      if (a.stage === 'toStart') {
+        if (inCar() && near(M4_START.x, M4_START.z, 10)) {
+          a.stage = 'gates'; a.count = 0; a.timer = 40;
+          say('Mara', 'Clock is running. Five gates through the mangroves.');
+        }
+      } else if (a.stage === 'gates') {
+        a.timer -= dt;
+        if (a.timer <= 0) { failMission('Gate missed. The mangroves keep their secrets another day.'); return; }
+        var g = M4_GATES[a.count];
+        if (inCar() && near(g.x, g.z, 10)) {
+          a.count++;
+          if (a.count >= 5) {
+            a.stage = 'escape';
+            if (window.CoralPolice) CoralPolice.setWanted(3);
+            say('Detective Rourke', 'Voss! Rourke, Coral Bay PD. Whatever you are carrying, it ends tonight.');
+          } else { a.timer = 40; say('Mara', 'Gate ' + a.count + ' cleared. Keep moving.'); }
+        }
+      } else if (a.stage === 'escape') {
+        if (window.CoralPolice && CoralPolice.stars === 0) {
+          say('Mara', 'Simple, detective? Nothing in my bay is simple.');
+          completeMission();
+        }
+      }
+    } else if (a.num === 5) {
+      if (a.stage === 'deliver') {
+        a.timer -= dt;
+        if (a.timer <= 0) { failMission('Sun is up and Tito missed his boat. He will not let this go.'); return; }
+        if (inCar() && near(M5_DOCK.x, M5_DOCK.z, 10)) {
+          say('Tito', 'We made it. Whatever comes next, we face it together, sis.');
+          completeMission();
+        }
+      }
+    }
+  }
+
+  function draw(R) {
+    if (!inited) return;
+    if (active && active.rider && active.rider.state !== 'aboard' && active.rider.state !== 'gone') {
+      CoralPeople.draw(R, active.rider.person);
+    }
+    var o = objective();
+    if (o) {
+      R.draw(beaconMesh, Mat4.compose(o.x, 23, o.z, 0, 0, 0), { noDepthWrite: true });
+      R.draw(chevMesh, Mat4.compose(o.x, 13 + Math.sin(bobT * 2.4) * 1.1, o.z, 0, bobT * 1.8, 0));
+    }
+  }
+
+  function rankName() {
+    var name = RANKS[0].name;
+    for (var i = 0; i < RANKS.length; i++) if (respect >= RANKS[i].at) name = RANKS[i].name;
+    return name;
+  }
+  function restore(save) {
+    if (!save) return;
+    if (typeof save.money === 'number') money = save.money;
+    if (typeof save.respect === 'number') respect = save.respect;
+    if (typeof save.completedCount === 'number') completedCount = save.completedCount;
+    storyComplete = completedCount >= 5;
+  }
+
+  Object.defineProperty(api, 'money', { get: function () { return money; } });
+  Object.defineProperty(api, 'respect', { get: function () { return respect; } });
+  Object.defineProperty(api, 'completedCount', { get: function () { return completedCount; } });
+  Object.defineProperty(api, 'storyComplete', { get: function () { return storyComplete; } });
+  Object.defineProperty(api, 'state', { get: function () { return active ? 'active' : 'offer'; } });
+  api.start = start;
+  api.objective = objective;
+  api.objectiveText = objectiveText;
+  api.dialogue = dialogue;
+  api.rankName = rankName;
   api.restore = restore;
-  api.start = start; api.state = state; api.index = index;
-  api.dialogue = dialogue; api.objective = objective; api.objectiveText = objectiveText;
-  api.markedCar = markedCar; api.rankName = rankName;
-  api.landmarks = LM; api.titles = TITLES;
-  Object.defineProperty(api, 'completedCount', { get: function () { return completed; } });
+  api.update = update;
+  api.draw = draw;
+  api.activeName = function () { return active ? DEFS[active.num - 1].name : null; };
+  api.activeNum = function () { return active ? active.num : 0; };
   return api;
 }());
 window.CoralMissions = CoralMissions;

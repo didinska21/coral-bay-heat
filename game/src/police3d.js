@@ -1,283 +1,327 @@
-/* Police + wanted system, 3D (F4-S2). Adapted from the 2D police.js
-   balance spirit, rebuilt for the WebGL engine: stars 0-5, crimes
-   raise heat (caps per kind: steal 2, shot 3, everything else 4;
-   star 5 only via staging/mission authorisation), breaking line of
-   sight starts a SEARCHING escape clock per star (8/12/16/22/28 s).
-   Units are real Vehicles3D 'police' cars spawned at off-screen road
-   nodes and driven with free-drive steering. At >=3 stars a roadblock
-   (2 angled cars + a cop figure) waits on the player's road; at >=4
-   AIR ONE orbits with a searchlight cone + ground pool. Busted: a
-   unit close while the player is slow for ~2.5 s.
+/* police3d.js — wanted level, pursuit units, roadblocks and AIR ONE
+   for Coral Bay Heat 3D (session F4R-S3, rebuild).
 
-   API: window.CoralPolice = { init(env), update(dt), draw(ctx, vp),
-     crime(kind), setWanted(n), setFloor(n), clearFloor(), reset(),
-     stars, searching, visible, units, heliActive, onBusted } */
+   Wanted 0-5. Crime caps: 'steal' raises to at least 2, 'shot' to at
+   least 3, everything else (shunts, hit-and-run) adds a star up to 4.
+   Mission scripts may hold a wanted floor (CoralPolice.setFloor).
+   When no unit (or the AIR ONE spotlight) can see the player, the
+   SEARCHING drain runs per-star timers of 8/12/16/22/28 s; any sighting
+   resets the drain. Pursuit units (1/2/3/4/5 by stars) spawn at
+   off-screen road nodes and steer freely with CoralVehicles physics.
+   A roadblock (2 angled cars + a standing officer) is only built at
+   3+ stars while the player is currently seen. AIR ONE flies at 4+.
+   Busted: a unit close while the player is slow / on foot for ~2.5 s
+   fires CoralPolice.onBusted (default: Coral3D.state = 'busted').
+
+   Crime wiring choice: this module EXPORTS CoralPolice.reportCrime and
+   relies on main3d's fallback (Coral3D.onCrime is left unset).
+
+   Exported: window.CoralPolice = {
+     stars (get), searching (get), visible (get), heliActive (get),
+     blockCars, heliState, units,
+     reportCrime, setWanted, setFloor, clear,
+     onBusted (assignable), update(dt), draw(R) }
+*/
+'use strict';
+
 var CoralPolice = (function () {
-  var ESCAPE = [0, 8, 12, 16, 22, 28];       // seconds hidden per star
-  var COUNT = [0, 1, 2, 3, 4, 5];            // pursuit cars per star
-  var CAPS = { steal: 2, shot: 3, hitPed: 4, hitCar: 4, mission: 5 };
-  var COOLDOWN = { steal: 0, shot: 1.2, hitPed: 3, hitCar: 2.5, mission: 0 };
-  var SIGHT = 90;
+  var DRAIN = { 1: 8, 2: 12, 3: 16, 4: 22, 5: 28 };
+  var SIGHT = 85;               // ground-unit sight range (m)
+  var HELI_SIGHT = 70;          // spotlight sight range from its target
 
-  var env = null, gl = null, rng = null;
-  var units = [];            // pursuit cars (Vehicles3D states)
-  var blockCars = [], copFigure = null;
-  var heli = null;           // { angle, x, z, spotX, spotZ, rotor }
-  var heliBodyMesh = null, heliRotorMesh = null, coneMesh = null, poolMesh = null;
-  var lastCrimeAt = {}, clock = -99;
-  var spawnTimer = 0, blockCooldown = 0, arrest = 0, bustedFired = false;
+  var stars = 0, floor = 0;
+  var searching = false, visible = false;
+  var drainTimer = 0;
+  var lastKnown = { x: 0, z: 0 };
+  var bustTimer = 0, bustedFired = false;
+  var crimeCooldown = {};
+  var units = [];               // {car, active}
+  var block = null;             // {cars:[a,b], officer, x, z}
+  var blockCooldown = 0;
+  var heliState = { active: false, x: 0, y: 0, z: 0, heading: 0, angle: 0, tx: 0, tz: 0 };
+  var heliMesh = null, coneMesh = null, poolMesh = null, shadowMesh = null, rotorAngle = 0;
+  var inited = false;
 
-  var api = {
-    stars: 0, floor: 0, searching: false, visible: false,
-    units: units, heliActive: false, onBusted: null,
-    lastKnown: null
-  };
+  var api = { onBusted: null };
 
-  /* Segment vs building AABBs (2D slab test) — the line-of-sight rule. */
-  function losClear(x1, z1, x2, z2) {
-    var cols = env.city.colliders;
-    var dx = x2 - x1, dz = z2 - z1;
-    for (var i = 0; i < cols.length; i++) {
-      var b = cols[i];
-      var t0 = 0, t1 = 1, ok = true;
-      if (Math.abs(dx) < 1e-6) { if (x1 < b.minX || x1 > b.maxX) ok = false; }
-      else {
-        var ta = (b.minX - x1) / dx, tb = (b.maxX - x1) / dx;
-        if (ta > tb) { var s = ta; ta = tb; tb = s; }
-        t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) ok = false;
+  function playerPos() {
+    var p = Coral3D.player;
+    return { x: p.pos.x, z: p.pos.z, mode: p.mode, heading: p.heading };
+  }
+  function playerSpeed() {
+    var v = Coral3D.vehicleInstance;
+    if (v) return Math.abs(v.speed);
+    var m = Coral3D.mara;
+    return m ? Math.abs(m.speed || 0) : 0;
+  }
+  function dist2(ax, az, bx, bz) { var dx = ax - bx, dz = az - bz; return dx * dx + dz * dz; }
+
+  function losBlocked(x1, z1, x2, z2) {
+    var d = Math.sqrt(dist2(x1, z1, x2, z2));
+    var steps = Math.max(1, Math.floor(d / 9));
+    var cols = CoralCity.colliders;
+    for (var s = 1; s < steps; s++) {
+      var t = s / steps, px = x1 + (x2 - x1) * t, pz = z1 + (z2 - z1) * t;
+      for (var i = 0; i < cols.length; i++) {
+        var c = cols[i];
+        if (px > c.minX && px < c.maxX && pz > c.minZ && pz < c.maxZ) return true;
       }
-      if (ok) {
-        if (Math.abs(dz) < 1e-6) { if (z1 < b.minZ || z1 > b.maxZ) ok = false; }
-        else {
-          var tc = (b.minZ - z1) / dz, td = (b.maxZ - z1) / dz;
-          if (tc > td) { var s2 = tc; tc = td; td = s2; }
-          t0 = Math.max(t0, tc); t1 = Math.min(t1, td); if (t0 > t1) ok = false;
-        }
-      }
-      if (ok && t1 >= 0 && t0 <= 1) return false; // segment crosses a building
     }
-    return true;
+    return false;
+  }
+  function sees(unit, p) {
+    if (dist2(unit.car.x, unit.car.z, p.x, p.z) > SIGHT * SIGHT) return false;
+    return !losBlocked(unit.car.x, unit.car.z, p.x, p.z);
   }
 
-  function spawnUnit() {
-    var p = env.player(), nodes = env.city.roads.nodes;
-    for (var tries = 0; tries < 40; tries++) {
-      var n = nodes[Math.floor(rng() * nodes.length)];
-      var d = Math.hypot(n.x - p.x, n.z - p.z);
-      if (d < 100 || d > 210) continue;
-      var car = Vehicles3D.create(gl, { x: n.x, z: n.z, heading: rng() * 6.28, variant: 'police', color: '#eef0f2' });
-      units.push(car);
-      return car;
+  function ensureInit() {
+    if (inited) return;
+    inited = true;
+    var gl = Coral3D.gl;
+    for (var i = 0; i < 5; i++) {
+      var car = CoralVehicles.create(gl, 'police', 0xf2f4f6, 0, -9999, 0);
+      units.push({ car: car, active: false, wander: Math.random() * 6.28 });
     }
-    return null;
+    heliMesh = CoralBakers.heli(gl, 0xf2f4f6);
+    var cb = new Baker();
+    cb.cone(0xfff2b0, { x: 0, y: 0, z: 0, r: 13, h: 38, seg: 12, emis: 0.55 });
+    coneMesh = cb.build(gl);
+    var pb = new Baker();
+    pb.cylinder(0xfff6c4, { x: 0, y: 0, z: 0, r: 12, h: 0.12, seg: 14, emis: 0.8 });
+    poolMesh = pb.build(gl);
+    var sb = new Baker();
+    sb.plane(0x0a0c10, { x: 0, y: 0, z: 0, w: 11, d: 11, emis: 0 });
+    shadowMesh = sb.build(gl);
+    var p0 = playerPos();
+    lastKnown.x = p0.x; lastKnown.z = p0.z;
   }
 
-  function buildRoadblock() {
-    var p = env.player();
-    var fx = -Math.sin(p.heading), fz = -Math.cos(p.heading);
-    var tx = p.x + fx * 70, tz = p.z + fz * 70;
-    // Snap the ambush point to the nearest road node.
-    var nodes = env.city.roads.nodes, best = null, bd = 1e9;
+  function spawnNode(p) {
+    var nodes = CoralCity.roads.nodes, best = null, bd = 1e12;
+    var cands = [];
     for (var i = 0; i < nodes.length; i++) {
-      var d = Math.hypot(nodes[i].x - tx, nodes[i].z - tz);
-      if (d < bd) { bd = d; best = nodes[i]; }
+      var d2 = dist2(nodes[i].x, nodes[i].z, p.x, p.z);
+      if (d2 > 95 * 95 && d2 < 300 * 300) cands.push(nodes[i]);
     }
-    var px = -fz, pz = fx; // perpendicular to travel
-    var perpHeading = Math.atan2(-px, -pz);
-    [-2.4, 2.4].forEach(function (off) {
-      var car = Vehicles3D.create(gl, {
-        x: best.x + px * off, z: best.z + pz * off,
-        heading: perpHeading + (off < 0 ? 0.55 : -0.55), variant: 'police', color: '#eef0f2'
-      });
-      blockCars.push(car);
-    });
-    copFigure = {
-      x: best.x + px * 6.5, z: best.z + pz * 6.5, heading: perpHeading + Math.PI,
-      phase: 0, speed: 0, moving: 0,
-      parts: People3D.parts(gl, '#c98d5f', '#1d3a4d', '#1f2937')
-    };
-  }
-  function clearRoadblock() { blockCars = []; copFigure = null; }
-
-  function driveUnit(car, dt, tx, tz) {
-    var dx = tx - car.x, dz = tz - car.z;
-    var dist = Math.hypot(dx, dz);
-    var want = Math.atan2(-dx, -dz);
-    var diff = want - car.heading;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    var steer = Math.max(-1, Math.min(1, diff * 1.9));
-    var throttle = 1;
-    if (Math.abs(diff) > 2.3 && dist < 14) throttle = -0.85;      // three-point turn
-    else if (dist < 7.5) throttle = 0.25;                          // close in gently
-    else if (Math.abs(diff) > 1.2) throttle = 0.55;
-    Vehicles3D.update(car, dt, { throttle: throttle, steer: steer, handbrake: false }, env.city.colliders, env.city.bounds);
+    if (!cands.length) cands = nodes;
+    best = cands[Math.floor(Math.random() * cands.length)];
+    return best;
   }
 
-  function init(e) {
-    env = e; gl = e.gl; rng = SeededRandom.create(777);
-    var acc = new Acc(); City3D.addHeliBody(acc, '#e8e8ec');
-    heliBodyMesh = acc.build(gl);
-    var racc = new Acc();
-    racc.add(Prim.box(0.35, 0.06, 9.6, hexRgb('#22242a'), 0), Mat4.identity());
-    racc.add(Prim.box(9.6, 0.06, 0.35, hexRgb('#22242a'), 0), Mat4.identity());
-    heliRotorMesh = racc.build(gl);
-    var cacc = new Acc();
-    cacc.add(Prim.cylinder(1.6, 10, 40, 12, hexRgb('#7a6420'), 1.15), Mat4.identity());
-    coneMesh = cacc.build(gl);
-    var pacc = new Acc();
-    pacc.add(Prim.cylinder(9, 9, 0.12, 16, hexRgb('#8a6d1f'), 1.25), Mat4.identity());
-    poolMesh = pacc.build(gl);
-  }
-
-  function crime(kind) {
-    if (!env) return;
-    var now = clock;
-    if (lastCrimeAt[kind] !== undefined && now - lastCrimeAt[kind] < (COOLDOWN[kind] || 0)) return;
-    lastCrimeAt[kind] = now;
-    var cap = CAPS[kind] !== undefined ? CAPS[kind] : 4;
-    api.stars = Math.max(api.stars, Math.min(cap, api.stars + 1));
-    api.stars = Math.min(5, api.stars);
-    var p = env.player();
-    api.lastKnown = { x: p.x, z: p.z };
-    api.escapeElapsed = 0;
+  function reportCrime(kind, data) {
+    ensureInit();
+    var now = performance.now() / 1000;
+    if (kind === 'steal') {
+      stars = Math.max(stars, 2);
+    } else if (kind === 'shot') {
+      stars = Math.max(stars, 3);
+    } else {
+      if (crimeCooldown[kind] && now - crimeCooldown[kind] < 0.9) return;
+      crimeCooldown[kind] = now;
+      stars = Math.min(stars + 1, 4);
+    }
+    if (data && typeof data.x === 'number') { lastKnown.x = data.x; lastKnown.z = data.z; }
+    else { var p = playerPos(); lastKnown.x = p.x; lastKnown.z = p.z; }
+    if (stars > 0) searching = false;
   }
 
   function setWanted(n) {
-    api.stars = Math.max(0, Math.min(5, Math.round(n)));
-    api.floor = 0;
-    api.escapeElapsed = 0;
-    arrest = 0; bustedFired = false;
-    if (!api.stars) { units.length = 0; heli = null; clearRoadblock(); api.lastKnown = null; api.searching = false; }
-    else { var p = env.player(); api.lastKnown = { x: p.x, z: p.z }; }
+    ensureInit();
+    stars = Math.max(0, Math.min(5, Math.round(n)));
+    if (stars < floor) stars = floor;
+    drainTimer = 0; bustTimer = 0; bustedFired = false;
+    if (stars > 0) {
+      var p = playerPos();
+      lastKnown.x = p.x; lastKnown.z = p.z;
+      searching = false;
+    } else {
+      searching = false; visible = false;
+    }
   }
   function setFloor(n) {
-    api.floor = Math.max(0, Math.min(5, n));
-    if (api.stars < api.floor) { api.stars = api.floor; var p = env.player(); api.lastKnown = { x: p.x, z: p.z }; }
+    floor = Math.max(0, Math.min(5, Math.round(n || 0)));
+    if (stars < floor) setWanted(floor);
   }
-  function clearFloor() { api.floor = 0; }
-  function reset() { setWanted(0); lastCrimeAt = {}; }
+  function clear() {
+    stars = 0; searching = false; visible = false; drainTimer = 0;
+    bustTimer = 0; bustedFired = false; block = null;
+    heliState.active = false;
+    for (var i = 0; i < units.length; i++) units[i].active = false;
+  }
+
+  function buildBlock(p) {
+    var gl = Coral3D.gl;
+    var fx = -Math.sin(p.heading), fz = -Math.cos(p.heading);
+    var ax = p.x + fx * 48, az = p.z + fz * 48;
+    var px = Math.cos(p.heading), pz = -Math.sin(p.heading);
+    var c1 = CoralVehicles.create(gl, 'police', 0xf2f4f6, ax - px * 2.4, az - pz * 2.4, p.heading + Math.PI / 2 + 0.45);
+    var c2 = CoralVehicles.create(gl, 'police', 0xf2f4f6, ax + px * 2.4, az + pz * 2.4, p.heading + Math.PI / 2 - 0.45);
+    CoralVehicles.collideBuildings(c1); CoralVehicles.collideBuildings(c2);
+    var officer = CoralPeople.createPerson(gl, { shirt: 0x1d3f8f, pants: 0x14181f, skin: 0x8a5a34 },
+      ax + px * 6.5, az + pz * 6.5, p.heading + Math.PI);
+    CoralPeople.collidePerson(officer);
+    block = { cars: [c1, c2], officer: officer, x: ax, z: az };
+    blockCooldown = 18;
+  }
 
   function update(dt) {
-    if (!env) return;
-    clock += dt;
-    var p = env.player();
-    var pSpeed = Math.abs(p.speed || 0);
+    if (!window.Coral3D || !Coral3D.gl) return;
+    ensureInit();
+    var p = playerPos();
+    if (stars < floor) stars = floor;
 
-    /* --- visibility / line of sight --- */
-    var seen = false;
-    var all = units.concat(blockCars);
-    for (var i = 0; i < all.length; i++) {
-      var d = Math.hypot(all[i].x - p.x, all[i].z - p.z);
-      if (d < SIGHT && losClear(all[i].x, all[i].z, p.x, p.z)) { seen = true; break; }
+    /* --- sight --- */
+    var seen = false, i, u;
+    for (i = 0; i < units.length; i++) {
+      u = units[i];
+      if (u.active && sees(u, p)) seen = true;
     }
-    if (!seen && heli && Math.hypot(heli.x - p.x, heli.z - p.z) < 130 && losClear(heli.x, heli.z, p.x, p.z)) seen = true;
-    api.visible = seen && api.stars > 0;
-    if (api.visible) { api.lastKnown = { x: p.x, z: p.z }; api.escapeElapsed = 0; }
-
-    /* --- escape clock (SEARCHING) --- */
-    api.searching = false;
-    if (api.stars > api.floor && !api.visible) {
-      api.searching = api.stars > 0;
-      api.escapeElapsed += dt;
-      if (api.escapeElapsed >= ESCAPE[api.stars]) {
-        api.stars--;
-        api.escapeElapsed = 0;
-        if (api.stars <= api.floor) api.searching = false;
-        if (api.stars === 0) { units.length = 0; heli = null; clearRoadblock(); api.lastKnown = null; }
+    if (heliState.active && dist2(heliState.tx, heliState.tz, p.x, p.z) < HELI_SIGHT * HELI_SIGHT &&
+        !losBlocked(heliState.x, heliState.z, p.x, p.z)) seen = true;
+    visible = seen && stars > 0;
+    if (visible) {
+      lastKnown.x = p.x; lastKnown.z = p.z;
+      searching = false; drainTimer = 0;
+    } else if (stars > 0) {
+      searching = true;
+      drainTimer += dt;
+      var need = DRAIN[stars] || 12;
+      if (drainTimer >= need && stars > floor) {
+        stars--; drainTimer = 0;
+        if (stars <= 0) { stars = 0; clear(); return; }
       }
-    } else if (api.visible) api.escapeElapsed = 0;
+    } else searching = false;
 
-    /* --- spawn / despawn pursuit units --- */
-    spawnTimer -= dt;
-    for (var u = units.length - 1; u >= 0; u--) {
-      if (Math.hypot(units[u].x - p.x, units[u].z - p.z) > 400) units.splice(u, 1);
+    /* --- unit population --- */
+    var want = stars; // 1..5 units
+    var activeCount = 0;
+    for (i = 0; i < units.length; i++) if (units[i].active) activeCount++;
+    for (i = 0; i < units.length && activeCount < want; i++) {
+      if (!units[i].active) {
+        var n = spawnNode(p);
+        units[i].car.x = n.x; units[i].car.z = n.z;
+        units[i].car.heading = Math.random() * 6.28;
+        units[i].car.speed = 0; units[i].active = true; activeCount++;
+      }
     }
-    if (api.stars > 0 && units.length < COUNT[api.stars] && spawnTimer <= 0) {
-      if (spawnUnit()) spawnTimer = 1.1;
-      else spawnTimer = 0.4;
-    }
-
-    /* --- pursuit driving --- */
-    var goal = api.visible ? p : (api.lastKnown || p);
-    for (var j = 0; j < units.length; j++) {
-      driveUnit(units[j], dt, goal.x, goal.z);
-      Vehicles3D.collidePair(units[j], env.playerCar(), 0.3);
-      for (var k = j + 1; k < units.length; k++) Vehicles3D.collidePair(units[j], units[k], 0.5);
-      var traffic = env.traffic();
-      for (var q = 0; q < traffic.length; q++) Vehicles3D.collidePair(units[j], traffic[q], 0.3);
+    for (i = 0; i < units.length; i++) {
+      u = units[i];
+      if (u.active && activeCount > want) { u.active = false; activeCount--; }
     }
 
-    /* --- roadblock --- */
-    blockCooldown -= dt;
-    /* A roadblock is an ambush on a KNOWN position: it is only set
-       while a unit actually sees the player. (Building one ahead of a
-       hidden player would also make escape impossible — the parked
-       cars would "see" him from 70 m forever.) */
-    if (api.stars >= 3 && api.visible && !blockCars.length && blockCooldown <= 0) buildRoadblock();
-    if (blockCars.length) {
-      var bd2 = Math.hypot(blockCars[0].x - p.x, blockCars[0].z - p.z);
-      if (api.stars < 3 || bd2 > 220) { clearRoadblock(); blockCooldown = 18; }
+    /* --- steering: free pursuit toward player / last known --- */
+    var tx = visible ? p.x : lastKnown.x, tz = visible ? p.z : lastKnown.z;
+    var pc = Coral3D.vehicleInstance;
+    for (i = 0; i < units.length; i++) {
+      u = units[i];
+      if (!u.active) continue;
+      // a unit stranded far from the action re-stages off-screen
+      if (!visible && dist2(u.car.x, u.car.z, p.x, p.z) > 420 * 420) {
+        var n2 = spawnNode(p);
+        u.car.x = n2.x; u.car.z = n2.z; u.car.speed = 0;
+      }
+      var gx = tx, gz = tz;
+      var dTarget = Math.sqrt(dist2(u.car.x, u.car.z, gx, gz));
+      if (!visible && dTarget < 10) { // searching sweep around last known
+        u.wander += dt * 0.7;
+        gx = tx + Math.cos(u.wander) * 16; gz = tz + Math.sin(u.wander) * 16;
+        dTarget = Math.sqrt(dist2(u.car.x, u.car.z, gx, gz));
+      }
+      var desired = Math.atan2(-(gx - u.car.x), -(gz - u.car.z));
+      var diff = ((desired - u.car.heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      var steer = Math.max(-1, Math.min(1, diff * 1.4));
+      var throttle = 1;
+      if (Math.abs(diff) > 2.2) throttle = 0.25;
+      if (visible && dTarget < 7) throttle = 0.25;
+      CoralVehicles.update(u.car, { throttle: throttle, steer: steer, handbrake: false }, dt);
+      CoralVehicles.collideBuildings(u.car);
+      if (pc) CoralVehicles.collidePair(u.car, pc);
+      for (var j = 0; j < units.length; j++) {
+        if (j !== i && units[j].active) CoralVehicles.collidePair(u.car, units[j].car);
+      }
+      if (block) { CoralVehicles.collidePair(u.car, block.cars[0]); CoralVehicles.collidePair(u.car, block.cars[1]); }
+    }
+
+    /* --- roadblock: only while the player is seen --- */
+    if (blockCooldown > 0) blockCooldown -= dt;
+    if (block) {
+      if (stars < 3 || dist2(block.x, block.z, p.x, p.z) > 110 * 110) block = null;
+    } else if (stars >= 3 && visible && blockCooldown <= 0 && p.mode === 'car') {
+      buildBlock(p);
     }
 
     /* --- AIR ONE --- */
-    if (api.stars >= 4 && !heli) {
-      heli = { angle: rng() * 6.28, x: p.x, z: p.z - 60, spotX: p.x, spotZ: p.z, rotor: 0 };
-    }
-    if (api.stars < 4) heli = null;
-    api.heliActive = !!heli;
-    if (heli) {
-      var centre = api.visible ? p : (api.lastKnown || p);
-      heli.angle += dt * 0.32;
-      heli.rotor += dt * 28;
-      heli.x = centre.x + Math.cos(heli.angle) * 15;
-      heli.z = centre.z + Math.sin(heli.angle) * 15;
-      var lerpK = 1 - Math.exp(-3 * dt);
-      heli.spotX += (centre.x - heli.spotX) * lerpK;
-      heli.spotZ += (centre.z - heli.spotZ) * lerpK;
+    heliState.active = stars >= 4;
+    if (heliState.active) {
+      var cx = visible ? p.x : lastKnown.x, cz = visible ? p.z : lastKnown.z;
+      heliState.angle += dt * 0.45;
+      heliState.x = cx + Math.cos(heliState.angle) * 42;
+      heliState.z = cz + Math.sin(heliState.angle) * 42;
+      heliState.y = 38;
+      var vx = -Math.sin(heliState.angle), vz = Math.cos(heliState.angle);
+      heliState.heading = Math.atan2(-vx, -vz);
+      heliState.tx = visible ? p.x : cx; heliState.tz = visible ? p.z : cz;
+      rotorAngle += dt * 30;
     }
 
     /* --- busted --- */
-    var nearest = 1e9;
-    for (var b = 0; b < all.length; b++) {
-      var dd = Math.hypot(all[b].x - p.x, all[b].z - p.z);
-      if (dd < nearest) nearest = dd;
-    }
-    if (api.stars > 0 && nearest < 9 && pSpeed < 2) arrest += dt;
-    else arrest = Math.max(0, arrest - dt * 2);
-    if (arrest >= 2.5 && !bustedFired) {
-      bustedFired = true;
-      if (api.onBusted) api.onBusted();
+    if (stars > 0 && !bustedFired) {
+      var close = false;
+      for (i = 0; i < units.length; i++) {
+        if (units[i].active && dist2(units[i].car.x, units[i].car.z, p.x, p.z) < 7.5 * 7.5) close = true;
+      }
+      if (block && dist2(block.officer.x, block.officer.z, p.x, p.z) < 5 * 5) close = true;
+      if (close && playerSpeed() < 1.5) {
+        bustTimer += dt;
+        if (bustTimer >= 2.5) {
+          bustedFired = true;
+          if (typeof api.onBusted === 'function') api.onBusted();
+          else if (window.Coral3D) Coral3D.state = 'busted';
+        }
+      } else bustTimer = Math.max(0, bustTimer - dt * 2);
     }
   }
-  api.escapeElapsed = 0;
 
-  function draw(ctx, viewProj) {
-    if (!env) return;
+  function draw(R) {
+    if (!inited) return;
     var i;
-    for (i = 0; i < units.length; i++) Vehicles3D.draw(ctx, viewProj, units[i]);
-    for (i = 0; i < blockCars.length; i++) Vehicles3D.draw(ctx, viewProj, blockCars[i]);
-    if (copFigure) People3D.draw(ctx, viewProj, copFigure);
-    if (heli) {
-      ctx.draw(heliBodyMesh, Mat4.compose(heli.x, 40, heli.z, 0, Math.PI - heli.angle, 0.05, 1, 1, 1), viewProj, true);
-      ctx.draw(heliRotorMesh, Mat4.compose(heli.x, 41.15, heli.z, 0, heli.rotor, 0, 1, 1, 1), viewProj, true);
-      /* Searchlight: additive cone + ground pool, depth-write off so
-         the beam reads as light, not geometry — unmissable at night. */
-      var g = gl;
-      g.enable(g.BLEND);
-      g.blendFunc(g.ONE, g.ONE);
-      g.depthMask(false);
-      ctx.draw(coneMesh, Mat4.compose(heli.spotX, 20.4, heli.spotZ, 0, 0, 0, 1, 1, 1), viewProj, false);
-      ctx.draw(poolMesh, Mat4.compose(heli.spotX, 0.35, heli.spotZ, 0, 0, 0, 1, 1, 1), viewProj, false);
-      g.depthMask(true);
-      g.disable(g.BLEND);
+    for (i = 0; i < units.length; i++) {
+      if (units[i].active) CoralVehicles.draw(R, units[i].car);
+    }
+    if (block) {
+      CoralVehicles.draw(R, block.cars[0]);
+      CoralVehicles.draw(R, block.cars[1]);
+      CoralPeople.draw(R, block.officer);
+    }
+    if (heliState.active) {
+      var gl = Coral3D.gl;
+      // altitude shadow blob on the ground under the helicopter
+      R.draw(shadowMesh, Mat4.compose(heliState.x, 0.07, heliState.z, 0, 0, 0), { noDepthWrite: true });
+      var model = Mat4.compose(heliState.x, heliState.y, heliState.z, 0, heliState.heading, 0.10);
+      R.draw(heliMesh.body, model);
+      R.draw(heliMesh.rotor, Mat4.multiply(model, Mat4.compose(0, 1.16, 0.3, 0, rotorAngle, 0)));
+      // additive searchlight cone + ground pool, depth-write off
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE);
+      R.draw(coneMesh, Mat4.compose(heliState.tx, 19, heliState.tz, 0, 0, 0), { noDepthWrite: true, noCull: true });
+      R.draw(poolMesh, Mat4.compose(heliState.tx, 0.1, heliState.tz, 0, 0, 0), { noDepthWrite: true });
+      gl.disable(gl.BLEND);
     }
   }
 
-  api.init = init; api.update = update; api.draw = draw;
-  api.crime = crime; api.setWanted = setWanted; api.setFloor = setFloor;
-  api.clearFloor = clearFloor; api.reset = reset;
-  api.losClear = losClear;
+  Object.defineProperty(api, 'stars', { get: function () { return stars; } });
+  Object.defineProperty(api, 'searching', { get: function () { return searching; } });
+  Object.defineProperty(api, 'visible', { get: function () { return visible; } });
+  Object.defineProperty(api, 'heliActive', { get: function () { return heliState.active; } });
+  Object.defineProperty(api, 'blockCars', { get: function () { return block ? block.cars : []; } });
+  api.heliState = heliState;
+  api.units = units;
+  api.reportCrime = reportCrime;
+  api.setWanted = setWanted;
+  api.setFloor = setFloor;
+  api.clear = clear;
+  api.update = update;
+  api.draw = draw;
   return api;
 }());
 window.CoralPolice = CoralPolice;
