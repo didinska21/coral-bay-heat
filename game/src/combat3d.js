@@ -145,6 +145,7 @@ var CoralCombat = (function () {
      seconds (refreshed by repeat fire). Decay lives in update(). */
   function markAiming(ped, tx, tz) {
     if (!ped) return;
+    ped.recoilT = performance.now(); // render-layer gun kick for this shot
     ped.pose = 'aim';
     ped.aimTarget = { x: tx, z: tz, y: 1.25 };
     for (var i = 0; i < aimMarks.length; i++) {
@@ -155,6 +156,7 @@ var CoralCombat = (function () {
 
   function fire() {
     var mara = Coral3D.mara;
+    mara.recoilT = performance.now(); // render-layer gun kick
     var fx = -Math.sin(mara.heading), fz = -Math.cos(mara.heading);
     if (window.CoralPolice) CoralPolice.reportCrime('shot', { x: mara.x, z: mara.z });
     var bestT = 40, bestPed = null, bestCar = null;
@@ -231,6 +233,7 @@ var CoralCombat = (function () {
     return best;
   }
   function damage(n) {
+    if (window.Coral3D && Coral3D.mara) Coral3D.mara.flinchT = performance.now(); // hit reaction, visual only
     var shooter = attributeShooter();
     if (shooter && window.Coral3D && Coral3D.mara) {
       var mara = Coral3D.mara;

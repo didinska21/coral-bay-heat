@@ -52,7 +52,7 @@ var CoralVehicles = (function () {
      dust puffs. All seeded/fixed — no Math.random, no time source
      except the pre-existing police light-bar pulse. */
   var wheelMesh = null, brakeLampMesh = null, brakeGlowMesh = null,
-      brakePoolMesh = null, puffMesh = null;
+      brakePoolMesh = null, puffMesh = null, carShadowMesh = null;
 
   /* One wheel (tyre + hub both sides), centred at the wheel centre,
      axis along X — drawn per wheel so the FRONT pair can yaw with
@@ -199,6 +199,22 @@ var CoralVehicles = (function () {
     var trim = shadeRGB(hexRGB(col), 1.3);
     b.panel(trim, { x: -d.w / 2 - 0.014, y: bodyY + d.bh * 0.22, z: 0, w: 0.03, h: 0.055, d: d.l * 0.8 });
     b.panel(trim, { x: d.w / 2 + 0.014, y: bodyY + d.bh * 0.22, z: 0, w: 0.03, h: 0.055, d: d.l * 0.8 });
+    /* cabin depth + brightwork (fidelity round): a rear screen so
+       the glasshouse wraps the cabin instead of ending at the B
+       pillars, chrome bumper strips front/rear, and roof rails on
+       the tall variants — silhouette detail that reads at range. */
+    if (variant !== 'bajaj' && variant !== 'pickup') {
+      var cabZ2 = variant === 'suv' ? 0.15 : (variant === 'angkot' ? 0.05 : 0.28);
+      var cabD2 = variant === 'suv' ? d.l * 0.52 : (variant === 'angkot' ? d.l * 0.76 : d.l * 0.44);
+      b.panel(glassTint, { x: 0, y: glassTop + d.ch * 0.42, z: cabZ2 + cabD2 / 2 + 0.02, w: d.w * 0.8, h: d.ch * 0.72, d: 0.04, rx: -0.3, emis: 0.18 });
+    }
+    b.panel(0xd8dde2, { x: 0, y: 0.50, z: -d.l / 2 - 0.10, w: d.w * 0.9, h: 0.07, d: 0.05, emis: 0.12 });
+    b.panel(0xd8dde2, { x: 0, y: 0.50, z: d.l / 2 + 0.10, w: d.w * 0.9, h: 0.07, d: 0.05, emis: 0.12 });
+    if (variant === 'suv' || variant === 'angkot') {
+      var railY = glassTop + d.ch + 0.03;
+      b.panel(0x22262c, { x: -d.w * 0.3, y: railY, z: 0.1, w: 0.07, h: 0.07, d: d.l * 0.42 });
+      b.panel(0x22262c, { x: d.w * 0.3, y: railY, z: 0.1, w: 0.07, h: 0.07, d: d.l * 0.42 });
+    }
     /* wheel arches: dark open cylinders a touch wider than the tyres,
        so each wheel sits in a visible arch shadow; hubcaps (base mesh)
        still poke out past them */
@@ -291,6 +307,13 @@ var CoralVehicles = (function () {
     brakeGlowMesh = buildDiscSprite(gl, [1.0, 0.16, 0.20], 0.85);
     brakePoolMesh = buildBeamPoolRed(gl);
     puffMesh = buildPuff(gl);
+    /* Ground contact shadow: two-tier unit disc (soft outer ring +
+       dark core) in ONE mesh, scaled per car in draw() — grounds
+       every vehicle the way the figure blob grounds pedestrians. */
+    var csb = new Baker();
+    csb.cylinder(0x1b1d21, { x: 0, y: 0, z: 0, r: 1.0, h: 0.02, seg: 14 });
+    csb.cylinder(0x0a0b0d, { x: 0, y: 0.006, z: 0, r: 0.78, h: 0.03, seg: 14 });
+    carShadowMesh = csb.build(gl);
   }
   /* Red variant of the beam pool (radial disc in XZ, unit radius). */
   function buildBeamPoolRed(gl) {
@@ -439,11 +462,14 @@ var CoralVehicles = (function () {
 
   function draw(R, car) {
     var model = Mat4.compose(car.x, 0, car.z, 0, car.heading, 0);
-    R.draw(car.mesh, model);
     var gl = R.gl;
-    if (!gl) return;
-    R.draw(overlayFor(gl, car.variant, car.color), model);
+    if (!gl) { R.draw(car.mesh, model); return; }
     ensureFx(gl);
+    /* contact shadow first (under the body, above the road) */
+    var dd = DIMS[car.variant] || DIMS.sedan;
+    R.draw(carShadowMesh, Mat4.compose(car.x, 0.055, car.z, 0, car.heading, 0, dd.w / 2 + 0.38, 1, dd.l / 2 + 0.34), { noDepthWrite: true });
+    R.draw(car.mesh, model);
+    R.draw(overlayFor(gl, car.variant, car.color), model);
     /* F-FIX (coordinator): near-field gate for the Fase 4D extras.
        window.__camFocus is published by main3d each frame (the look
        target: player / player car / staged tableau). Within 45 m

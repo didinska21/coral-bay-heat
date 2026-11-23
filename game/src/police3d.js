@@ -333,7 +333,11 @@ var CoralPolice = (function () {
     poolMesh = buildPool(gl);
     bucketMesh = buildBucket(gl);
     var cb = new Baker();
-    cb.cylinder(0x23272e, { x: 0, y: 0, z: 0, r: 0.05, h: 1, seg: 6, emis: 0.05 });
+    /* Cable spans local y 0..1 (base at the bucket rim, tip at the
+       heli belly) — NOT centred: the old centred unit cylinder was
+       scaled by cLen around the rim, so only its upper half reached
+       toward the belly and the top ~half of the run never rendered. */
+    cb.cylinder(0x23272e, { x: 0, y: 0.5, z: 0, r: 0.055, h: 1, seg: 6, emis: 0.05 });
     cableMesh = cb.build(gl);
     streamMesh = buildStream(gl, false);
     streamCoreMesh = buildStream(gl, true);

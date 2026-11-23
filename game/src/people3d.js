@@ -56,25 +56,42 @@ var CoralPeople = (function () {
     var body = new Baker();
     body.box(pants, { x: 0, y: 0.92, z: 0, w: 0.36, h: 0.22, d: 0.22 });                 // pelvis
     body.box(shirt, { x: 0, y: 1.28, z: 0, w: 0.44, h: 0.52, d: 0.26 });                 // torso
+    body.box(shadeRGB(hexRGB(shirt), 0.8), { x: 0, y: 1.52, z: 0, w: 0.56, h: 0.15, d: 0.29 }); // shoulder bar
+    body.box(shadeRGB(hexRGB(pants), 0.62), { x: 0, y: 1.05, z: 0, w: 0.38, h: 0.07, d: 0.24 }); // belt line
+    body.box(skin, { x: 0, y: 1.585, z: 0, w: 0.15, h: 0.09, d: 0.15 });                 // neck
     body.box(skin, { x: 0, y: 1.72, z: 0, w: 0.30, h: 0.34, d: 0.30 });                  // head
     body.box(0x2a2019, { x: 0, y: 1.92, z: 0.02, w: 0.33, h: 0.10, d: 0.33 });           // hair cap
-    var armB = new Baker();
-    armB.box(shirt, { x: 0, y: -0.16, z: 0, w: 0.13, h: 0.34, d: 0.15 });               // upper arm (sleeve)
-    armB.box(skin, { x: 0, y: -0.48, z: 0, w: 0.11, h: 0.32, d: 0.12 });                // forearm + hand
-    var legB = new Baker();
-    legB.box(pants, { x: 0, y: -0.34, z: 0, w: 0.16, h: 0.68, d: 0.18 });               // leg
-    legB.box(0x1c1e22, { x: 0, y: -0.70, z: -0.03, w: 0.17, h: 0.10, d: 0.27 });         // shoe
-    /* Pistol, baked along the arm's local -y (grip at the hand end)
-       so parenting it to the arm matrix points it wherever the arm
-       points. Only drawn while a figure aims. */
+    body.box(0x2a2019, { x: 0, y: 1.76, z: 0.145, w: 0.31, h: 0.30, d: 0.06 });          // hair back
+    /* Segmented limbs (fidelity round): upper arm pivots at the
+       shoulder, forearm at the elbow (0.30 below), thigh at the hip,
+       shin at the knee (0.40 below) — so walk cycles bend knees and
+       elbows instead of swinging stiff boards. */
+    var upArmB = new Baker();
+    upArmB.box(shirt, { x: 0, y: -0.02, z: 0, w: 0.17, h: 0.13, d: 0.18 });             // shoulder cap
+    upArmB.box(shirt, { x: 0, y: -0.17, z: 0, w: 0.13, h: 0.30, d: 0.15 });             // upper arm (sleeve)
+    var foreB = new Baker();
+    foreB.box(skin, { x: 0, y: -0.13, z: 0, w: 0.11, h: 0.26, d: 0.12 });               // forearm
+    foreB.box(skin, { x: 0, y: -0.30, z: -0.01, w: 0.12, h: 0.10, d: 0.13 });           // hand
+    var thighB = new Baker();
+    thighB.box(pants, { x: 0, y: -0.20, z: 0, w: 0.16, h: 0.40, d: 0.18 });             // thigh
+    var shinB = new Baker();
+    shinB.box(shadeRGB(hexRGB(pants), 0.92), { x: 0, y: -0.14, z: 0, w: 0.14, h: 0.28, d: 0.16 }); // shin
+    shinB.box(0x1c1e22, { x: 0, y: -0.33, z: -0.03, w: 0.17, h: 0.10, d: 0.27 });        // shoe
+    /* Pistol, baked along the FOREARM's local -y (grip at the hand
+       end) so parenting it to the forearm matrix points it wherever
+       the hand points. Only drawn while a figure aims. */
     var gunB = new Baker();
-    gunB.box(0x17181c, { x: 0, y: -0.66, z: -0.02, w: 0.09, h: 0.30, d: 0.13 });         // slide/barrel along arm dir
-    gunB.box(0x232428, { x: 0, y: -0.52, z: 0.05, w: 0.08, h: 0.16, d: 0.09 });          // grip
-    f = { body: body.build(gl), arm: armB.build(gl), leg: legB.build(gl), gun: gunB.build(gl) };
+    gunB.box(0x17181c, { x: 0, y: -0.34, z: -0.02, w: 0.09, h: 0.30, d: 0.13 });         // slide/barrel along arm dir
+    gunB.box(0x232428, { x: 0, y: -0.20, z: 0.05, w: 0.08, h: 0.16, d: 0.09 });          // grip
+    f = {
+      body: body.build(gl), upperArm: upArmB.build(gl), foreArm: foreB.build(gl),
+      thigh: thighB.build(gl), shin: shinB.build(gl), gun: gunB.build(gl)
+    };
     figureCache[key] = f;
-    if (!shadowMesh) { // one flat dark disc, reused under every figure
+    if (!shadowMesh) { // two-tier blob: soft outer ring + dark contact core, one mesh
       var sb = new Baker();
-      sb.cylinder(0x0b0d10, { x: 0, y: 0, z: 0, r: 0.46, h: 0.03, seg: 10 });
+      sb.cylinder(0x1a1c20, { x: 0, y: 0, z: 0, r: 0.56, h: 0.02, seg: 12 });
+      sb.cylinder(0x08090b, { x: 0, y: 0.006, z: 0, r: 0.38, h: 0.03, seg: 12 });
       shadowMesh = sb.build(gl);
     }
     return f;
@@ -83,6 +100,7 @@ var CoralPeople = (function () {
   function createPerson(gl, colors, x, z, heading) {
     return {
       x: x, z: z, heading: heading || 0, speed: 0, walkPhase: Math.random() * 6.28,
+      idlePhase: Math.random() * 6.28, recoilT: -1e9, flinchT: -1e9,
       vx: 0, vz: 0, down: false, downTime: 0,
       pose: 'stand', aimTarget: null, armed: false,
       parts: figureFor(gl, colors.shirt, colors.pants, colors.skin)
@@ -169,6 +187,7 @@ var CoralPeople = (function () {
        combat behaviour changes. */
     var firingNow = !!(window.CoralCombat && CoralCombat.firing);
     if (firingNow) {
+      p.recoilT = performance.now(); // render-layer recoil pulse while the trigger is held
       if (p.pose !== 'aim') { p._poseBeforeAim = p.pose; p.pose = 'aim'; }
       p._autoAim = true; p.armed = true;
       p.aimTarget = { x: p.x - Math.sin(p.heading) * 24, z: p.z - Math.cos(p.heading) * 24, y: 1.3 };
@@ -314,6 +333,23 @@ var CoralPeople = (function () {
   }
 
   /* ---------------------------------------------------------------- draw */
+  var ELBOW_Y = -0.30, KNEE_Y = -0.40; // segment joint offsets (see figureFor)
+  /* One arm chain: upper arm at the shoulder, forearm at the elbow.
+     Returns the forearm matrix (the gun parents to it). */
+  function drawArm(R, p, bodyBase, side, shX, shY, upRx, upYaw, upRz, foreRx, foreRz) {
+    var up = Mat4.multiply(bodyBase, Mat4.compose(side * shX, shY, 0, upRx, upYaw || 0, upRz || 0));
+    R.draw(p.parts.upperArm, up);
+    var fore = Mat4.multiply(up, Mat4.compose(0, ELBOW_Y, 0, foreRx || 0, 0, foreRz || 0));
+    R.draw(p.parts.foreArm, fore);
+    return fore;
+  }
+  /* One leg chain: thigh at the hip, shin at the knee. kneeBend is a
+     positive backward bend of the shin relative to the thigh. */
+  function drawLeg(R, p, base, side, hipX, hipY, thighRx, kneeBend, rz) {
+    var th = Mat4.multiply(base, Mat4.compose(side * hipX, hipY, 0, thighRx, 0, rz || 0));
+    R.draw(p.parts.thigh, th);
+    R.draw(p.parts.shin, Mat4.multiply(th, Mat4.compose(0, KNEE_Y, 0, -(kneeBend || 0), 0, 0)));
+  }
   function drawFigure(R, p) {
     if (p.down) { // tipped over: whole figure pitched flat at ground level
       R.draw(p.parts.body, Mat4.compose(p.x, 0.28, p.z, Math.PI / 2 - 0.12, p.heading, 0));
@@ -326,6 +362,18 @@ var CoralPeople = (function () {
        combat marks shooters by setting both, staging may set either. */
     if (pose === 'stand' && p.aimTarget) pose = 'aim';
     var moving = p.speed > 0.1;
+    var nowMs = performance.now();
+    /* Idle life: a standing figure breathes (slow torso pitch) and
+       shifts its weight (slow roll); phases are per-person so a crowd
+       never sways in lockstep. Amplitudes are small — life, not dance. */
+    var idle = moving ? 0 : 1;
+    var breathe = Math.sin(nowMs * 0.0016 + (p.idlePhase || 0)) * idle;
+    var sway = Math.sin(nowMs * 0.0007 + (p.idlePhase || 0) * 1.7) * idle;
+    /* Recoil / hit-flinch pulses: timestamps set by combat + the
+       player update; each is a fast exponential kick in the render
+       layer only (no state, no logic reads them back). */
+    var recoil = Math.max(0, 1 - (nowMs - (p.recoilT || -1e9)) / 170);
+    var flinch = Math.max(0, 1 - (nowMs - (p.flinchT || -1e9)) / 240);
     var bob = moving ? Math.abs(Math.sin(p.walkPhase)) * 0.05 : 0;
     var swingAmp = (p.speed > 5 ? 0.85 : 0.55) * Math.min(1, p.speed / 2.5);
     if (pose === 'stride') swingAmp = Math.max(swingAmp, 0.8); // frozen mid-step, full split
@@ -335,10 +383,23 @@ var CoralPeople = (function () {
          the split at a readable minimum in the walkPhase direction. */
       swing = (swing < 0 ? -1 : 1) * 0.62;
     }
-    var torsoPitch = 0, torsoRoll = 0, torsoYaw = 0, drop = 0;
+    /* Per-leg gait: thigh swing + knee bend peaking mid-swing-through
+       (cos of the leg's own phase), so feet lift instead of skating. */
+    var phL = p.walkPhase, phR = p.walkPhase + Math.PI;
+    var ampN = Math.min(1, swingAmp / 0.55);
+    var thighL = Math.sin(phL) * swingAmp, thighR = Math.sin(phR) * swingAmp;
+    if (pose === 'stride' && !moving) { thighL = swing; thighR = -swing * 0.85; }
+    var kneeL = Math.max(0, -Math.cos(phL)) * 0.72 * ampN + 0.04;
+    var kneeR = Math.max(0, -Math.cos(phR)) * 0.72 * ampN + 0.04;
+    if (!moving && pose !== 'stride') { kneeL = 0.05; kneeR = 0.05; }
+    /* Forward lean grows with speed: runners pitch into the stride. */
+    var runLean = Math.min(0.16, Math.max(0, p.speed - 2) * 0.022);
+    var torsoPitch = runLean + breathe * 0.018, torsoRoll = sway * 0.022, torsoYaw = 0, drop = 0;
     if (pose === 'crouch') { torsoPitch = 0.42; drop = 0.36; }
     else if (pose === 'lean') { torsoRoll = 0.30; torsoPitch = 0.10; drop = 0.06; }
     else if (pose === 'aim') { torsoPitch = 0.07; }
+    torsoPitch += flinch * 0.38 - recoil * 0.05; // hit snap + gun kick
+    torsoRoll += flinch * 0.12;
     var base = Mat4.compose(p.x, bob - drop, p.z, 0, p.heading, 0);
     /* Torso + head twist/pitch/roll on their own base so the legs
        stay planted on the heading while the upper body works. */
@@ -350,35 +411,39 @@ var CoralPeople = (function () {
     if (pose === 'aim') {
       /* Both arms up, pistol two-handed: arm geometry hangs along
          -y, so rx = PI/2 + pitch points it forward along the aim
-         direction (see aimAngles). Right arm carries the gun; the
-         left arm rises to meet it, rolled inward. Legs brace: a
-         shooter mid-advance keeps its stride, a planted one splits
-         fore/aft slightly instead of standing to attention. */
-      var armRx = Math.PI / 2 + aim.pitch;
+         direction (see aimAngles). The right forearm carries the
+         gun near-straight (a shooter's locked wrist, kicked up a
+         touch by recoil); the left forearm folds across to support
+         it. Legs brace: a shooter mid-advance keeps its stride, a
+         planted one splits fore/aft with a bent rear knee. */
+      var armRx = Math.PI / 2 + aim.pitch - recoil * 0.15;
       var brace = moving ? swing : 0.22;
-      var rightArm = Mat4.multiply(bodyBase, Mat4.compose(shX, shY, 0, armRx, aim.relYaw * 0.55, -0.06));
-      R.draw(p.parts.arm, rightArm);
-      if (p.parts.gun) R.draw(p.parts.gun, rightArm);
-      R.draw(p.parts.arm, Mat4.multiply(bodyBase, Mat4.compose(-shX, shY, 0, armRx * 0.94, aim.relYaw * 0.55, 0.38)));
-      R.draw(p.parts.leg, Mat4.multiply(base, Mat4.compose(-hipX, hipY, 0, -brace, 0, 0.03)));
-      R.draw(p.parts.leg, Mat4.multiply(base, Mat4.compose(hipX, hipY, 0, brace * 0.8, 0, -0.03)));
+      var fore = drawArm(R, p, bodyBase, 1, shX, shY, armRx, aim.relYaw * 0.55, -0.06, -0.07 - recoil * 0.1, 0);
+      if (p.parts.gun) R.draw(p.parts.gun, fore);
+      drawArm(R, p, bodyBase, -1, shX, shY, armRx * 0.94, aim.relYaw * 0.55, 0.38, 0.62, -0.42);
+      drawLeg(R, p, base, -1, hipX, hipY, -brace, 0.10, 0.03);
+      drawLeg(R, p, base, 1, hipX, hipY, brace * 0.8, moving ? kneeR : 0.34, -0.03);
       return;
     }
     if (pose === 'crouch') {
-      /* Knees bent: legs shortened (scaled at the hip) and split,
-         arms low and forward-ready. */
-      R.draw(p.parts.arm, Mat4.multiply(bodyBase, Mat4.compose(-shX, shY, 0, 0.55, 0, 0.16)));
-      R.draw(p.parts.arm, Mat4.multiply(bodyBase, Mat4.compose(shX, shY, 0, 0.55, 0, -0.16)));
-      R.draw(p.parts.leg, Mat4.multiply(base, Mat4.compose(-hipX, hipY, 0, 0.52, 0, 0.05, 1, 0.72, 1)));
-      R.draw(p.parts.leg, Mat4.multiply(base, Mat4.compose(hipX, hipY, 0, -0.38, 0, -0.05, 1, 0.72, 1)));
+      /* Real crouch: thighs fold forward, shins fold back under
+         them (deep knee bend), body dropped; arms low, elbows bent,
+         hands forward-ready. */
+      drawArm(R, p, bodyBase, -1, shX, shY, 0.55, 0, 0.16, 0.5, 0);
+      drawArm(R, p, bodyBase, 1, shX, shY, 0.55, 0, -0.16, 0.5, 0);
+      drawLeg(R, p, base, -1, hipX, hipY, 0.95, 1.05, 0.05);
+      drawLeg(R, p, base, 1, hipX, hipY, -0.30, 0.85, -0.05);
       return;
     }
-    /* stand / stride / lean: the classic swing (arms counter-swing
-       the legs), unchanged for 'stand'. */
-    R.draw(p.parts.arm, Mat4.multiply(bodyBase, Mat4.compose(-shX, shY, 0, swing, 0, 0.07)));
-    R.draw(p.parts.arm, Mat4.multiply(bodyBase, Mat4.compose(shX, shY, 0, -swing, 0, -0.07)));
-    R.draw(p.parts.leg, Mat4.multiply(base, Mat4.compose(-hipX, hipY, 0, -swing, 0, 0)));
-    R.draw(p.parts.leg, Mat4.multiply(base, Mat4.compose(hipX, hipY, 0, swing, 0, 0)));
+    /* stand / stride / lean: arms counter-swing the legs with a
+       natural elbow bend that deepens as the arm swings back;
+       a flinch throws both forearms up. */
+    var elbL = 0.28 + Math.max(0, -Math.sin(phL)) * 0.3 + flinch * 0.7;
+    var elbR = 0.28 + Math.max(0, -Math.sin(phR)) * 0.3 + flinch * 0.7;
+    drawArm(R, p, bodyBase, -1, shX, shY, swing + breathe * 0.03, 0, 0.07 + sway * 0.02 + flinch * 0.3, elbL, 0);
+    drawArm(R, p, bodyBase, 1, shX, shY, -swing - breathe * 0.03, 0, -0.07 - sway * 0.02 - flinch * 0.3, elbR, 0);
+    drawLeg(R, p, base, -1, hipX, hipY, -thighL, kneeL, 0);
+    drawLeg(R, p, base, 1, hipX, hipY, -thighR, kneeR, 0);
   }
   function draw(R, person) { drawFigure(R, person); }
   function drawCrowd(R, crowd, camX, camZ) {

@@ -244,6 +244,8 @@ function bakeHeliInto(b, colorHex) {
   b.box(col, { x: 0, y: 0, z: 0.3, w: 1.7, h: 1.55, d: 3.1, top: shadeRGB(hexRGB(col), 1.07) });
   b.prism(col, { x: 0, y: -0.1, z: -1.95, w: 1.55, h: 1.15, d: 1.1, h2: 0.35 });
   b.panel(glass, { x: 0, y: 0.28, z: -2.42, w: 1.3, h: 0.78, d: 0.08, rx: -0.25 });
+  b.panel(col, { x: 0, y: 0.28, z: -2.44, w: 0.09, h: 0.8, d: 0.06, rx: -0.25 }); // windscreen centre post
+  b.box(dark, { x: 0, y: -0.86, z: 0.3, w: 1.45, h: 0.22, d: 2.9 });              // dark belly pan (grounds the airframe)
   b.panel(0xff7847, { x: 0, y: -0.45, z: -0.9, w: 1.72, h: 0.3, d: 1.9 }); // coral cheatline
   b.box(dark, { x: 0, y: 0.12, z: 3.6, w: 0.34, h: 0.34, d: 3.6 });          // tail boom
   b.panel(col, { x: 0, y: 0.55, z: 5.35, w: 0.1, h: 1.15, d: 0.62 });        // tail fin
@@ -558,6 +560,12 @@ function buildCity(gl) {
     var wall = pick(pal.walls);
     var b = bk(cx, cz);
     b.box(wall, { x: cx, y: h / 2, z: cz, w: w, h: h, d: d, top: pal.roof });
+    /* Facade depth (fidelity round): a darker PLINTH band proud of
+       the walls grounds the mass and reads as a shadow gap at street
+       level; a CORNICE ledge just under the roofline throws a hard
+       horizontal shade line that separates wall from roof at range. */
+    b.box(shadeRGB(hexRGB(wall), 0.52), { x: cx, y: 0.55, z: cz, w: w + 0.35, h: 1.1, d: d + 0.35, top: shadeRGB(hexRGB(wall), 0.68) });
+    b.box(shadeRGB(hexRGB(wall), 1.1), { x: cx, y: h - 0.28, z: cz, w: w + 0.3, h: 0.55, d: d + 0.3, top: pal.roof });
     // rooftop variation: parapet rim, water tank, or plant boxes
     var roofV = rnd();
     if (h >= 9 && roofV < 0.34) { // parapet rim + a tank or plant cluster
@@ -781,6 +789,17 @@ function buildCity(gl) {
       b.panel(0x7a1216, { x: cx - w / 2 - 0.28, y: 2.25, z: cz + oz + 0.7, w: 0.08, h: 0.18, d: 0.9 });
       b.panel(0x8f1a1a, { x: cx - w / 2 - 0.27, y: 1.8, z: cz + oz, w: 0.06, h: 2.7, d: 0.1 });
     });
+    /* Fidelity round: maroon pilaster strips in the gaps between
+       the red doors + a dark frame border behind each door, so the
+       flat white front breaks into bays with real depth; plus a low
+       contact-shadow strip where the wall meets the forecourt. */
+    [-6.6, -3.4, -0.2, 3.0, 6.2].forEach(function (oz) {
+      b.panel(0x6e3a34, { x: cx - w / 2 - 0.2, y: 1.95, z: cz + oz, w: 0.14, h: 3.3, d: 0.42 });
+    });
+    [-8.2, -5.0, -1.8, 1.4, 4.6].forEach(function (oz) {
+      b.panel(0x5d1512, { x: cx - w / 2 - 0.13, y: 1.8, z: cz + oz, w: 0.1, h: 3.15, d: 3.15 });
+    });
+    b.box(0x37312b, { x: cx - w / 2 - 0.45, y: 0.1, z: cz, w: 0.9, h: 0.2, d: d - 0.8 });
     // grey sign panel, south section: red house glyph + two-tone text.
     // F-B LEGIBILITY REBUILD: the old panel was 4.4 m wide with px 0.11-
     // 0.12 white letters on mid-grey 0x939aa1 — a smear at cover distance.
@@ -830,9 +849,19 @@ function buildCity(gl) {
     b.panel(BLUE, { x: cx, y: 2.3, z: cz + d / 2 + 0.1, w: w - 0.4, h: 4.6, d: 0.22 });
     // dark glass windows + centre door on the west face
     [-6.5, 3.4, 6.8].forEach(function (oz) {
+      /* Fidelity round: a white frame border proud of the wall but
+         recessed behind the glass, so each window reads as a framed
+         opening instead of a dark sticker on a flat wall. */
+      b.panel(0xe8ecec, { x: cx - w / 2 - 0.05, y: 2.0, z: cz + oz, w: 0.1, h: 1.74, d: 3.44 });
       b.panel(GLASS, { x: cx - w / 2 - 0.07, y: 2.0, z: cz + oz, w: 0.14, h: 1.5, d: 3.2 });
       b.panel(0xf5f7f5, { x: cx - w / 2 - 0.09, y: 2.0, z: cz + oz, w: 0.1, h: 1.5, d: 0.12 });
     });
+    // blue corner pilasters on the west face + a blue fascia trim
+    // under the eaves slab, tying the roof to the banded walls
+    [-d / 2 + 0.5, d / 2 - 0.5].forEach(function (oz) {
+      b.panel(BLUE, { x: cx - w / 2 - 0.09, y: 2.3, z: cz + oz, w: 0.18, h: 4.6, d: 0.55 });
+    });
+    b.panel(ROOFBLUE, { x: cx - w / 2 - 0.35, y: 4.82, z: cz, w: 0.14, h: 0.34, d: d + 1.6 });
     b.panel(GLASS, { x: cx - w / 2 - 0.07, y: 1.55, z: cz, w: 0.14, h: 2.5, d: 2.2 });
     // Z-free second line on the wall above the windows
     signText(b, 'SATUAN PELAYANAN', { x: cx - w / 2 - 0.2, y: 3.72, z: cz, nx: -1, nz: 0, px: 0.14, color: 0x145a9e, emis: 0.15, board: null });
@@ -1049,6 +1078,15 @@ function buildCity(gl) {
       b.cylinder(0xdfd2b2, { x: -186.8, y: 6.9, z: cz - 17.5 + co * 5, r: 0.55, h: 11.4, seg: 8 });
     }
     b.box(TRIM, { x: -186.8, y: 13.1, z: cz, w: 3.4, h: 1.6, d: 42 });
+    /* Fidelity round: recessed moulding panels on the west wall in
+       the bays between the columns + a shadow band directly under
+       the entablature, so the grand flat face gains panel depth and
+       a shade line instead of reading as one cream slab. */
+    for (var bp2 = 0; bp2 < 7; bp2++) {
+      b.panel(0x9a8a68, { x: -183.55, y: 7.6, z: cz - 15 + bp2 * 5, w: 0.1, h: 6.4, d: 3.3 });
+      b.panel(0xe6dcc0, { x: -183.6, y: 7.6, z: cz - 15 + bp2 * 5, w: 0.08, h: 5.6, d: 2.6 });
+    }
+    b.panel(0x8a7c5c, { x: -185.2, y: 12.15, z: cz, w: 0.12, h: 0.55, d: 41 });
     b.prism(TRIM, { x: -186.8, y: 15.2, z: cz - 10.5, w: 3.6, h: 2.6, d: 21, h2: 0.2, ry: Math.PI });
     b.prism(TRIM, { x: -186.8, y: 15.2, z: cz + 10.5, w: 3.6, h: 2.6, d: 21, h2: 0.2 });
     signText(b, 'BALAI KOTA', { x: -188.7, y: 13.1, z: cz, nx: -1, nz: 0, px: 0.42, color: 0x8a1a1a, emis: 0.35, board: null });
