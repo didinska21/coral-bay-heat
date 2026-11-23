@@ -543,7 +543,16 @@ var CoralPolice = (function () {
         off.pose = 'stand'; off.aimTarget = null;
       }
       officerFxTimer -= dt;
-      if (stars >= 3 && visible && p.mode === 'foot' && od < 45 && officerFxTimer <= 0) {
+      /* MICRO-FIX (defect 2): only draw the officer's fire while he
+         is actually holding position WITH his block. Shot staging
+         relocates the block CARS (e.g. onto the Balai Kota plaza)
+         without moving him; a detached officer stands far off-frame
+         — in the slot-4 capture, behind the camera — and his tracer
+         streaked through the protagonist as a stray vertical white
+         line. In live play he spawns ~9 m from his cars, well inside
+         this gate, so gameplay fire is unchanged. */
+      var odBlock = Math.hypot(off.x - block.cars[0].x, off.z - block.cars[0].z);
+      if (stars >= 3 && visible && p.mode === 'foot' && od < 45 && odBlock < 15 && officerFxTimer <= 0) {
         officerFxTimer = 0.65 + officerFxRng() * 0.35;
         if (window.CoralCombat && CoralCombat.spawnShot && window.CoralPeople && CoralPeople.gunTip) {
           var spx = (officerFxRng() - 0.5) * 0.7, spz = (officerFxRng() - 0.5) * 0.7;

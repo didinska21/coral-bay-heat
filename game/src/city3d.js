@@ -241,11 +241,21 @@ function bakeCarInto(b, variant, colorHex) {
 }
 function bakeHeliInto(b, colorHex) {
   var col = colorHex || 0xe8ecf0, glass = 0x18222e, dark = 0x22282f;
-  b.box(col, { x: 0, y: 0, z: 0.3, w: 1.7, h: 1.55, d: 3.1, top: shadeRGB(hexRGB(col), 1.07) });
+  /* MICRO-FIX (defect 1): the hemisphere ambient term in gl.js gives
+     downward faces only 0.28x ambient, so the fuselage underside —
+     the face a low camera actually sees — crushed to a black smear
+     at range (slot-4 AIR ONE). The old flat-ambient shader rendered
+     it mid-grey. Bake the two underside faces (body bottom + belly
+     pan bottom) with an HDR base tone (x2.6) so they land back at
+     that grey read under the new lighting; every other face, and
+     every other mesh, is untouched. */
+  var colRGB = hexRGB(col);
+  var bellyTone = [colRGB[0] * 2.6, colRGB[1] * 2.6, colRGB[2] * 2.6];
+  b.box(col, { x: 0, y: 0, z: 0.3, w: 1.7, h: 1.55, d: 3.1, top: shadeRGB(hexRGB(col), 1.07), bottom: bellyTone });
   b.prism(col, { x: 0, y: -0.1, z: -1.95, w: 1.55, h: 1.15, d: 1.1, h2: 0.35 });
   b.panel(glass, { x: 0, y: 0.28, z: -2.42, w: 1.3, h: 0.78, d: 0.08, rx: -0.25 });
   b.panel(col, { x: 0, y: 0.28, z: -2.44, w: 0.09, h: 0.8, d: 0.06, rx: -0.25 }); // windscreen centre post
-  b.box(dark, { x: 0, y: -0.86, z: 0.3, w: 1.45, h: 0.22, d: 2.9 });              // dark belly pan (grounds the airframe)
+  b.box(dark, { x: 0, y: -0.86, z: 0.3, w: 1.45, h: 0.22, d: 2.9, bottom: bellyTone }); // dark belly pan (grounds the airframe)
   b.panel(0xff7847, { x: 0, y: -0.45, z: -0.9, w: 1.72, h: 0.3, d: 1.9 }); // coral cheatline
   b.box(dark, { x: 0, y: 0.12, z: 3.6, w: 0.34, h: 0.34, d: 3.6 });          // tail boom
   b.panel(col, { x: 0, y: 0.55, z: 5.35, w: 0.1, h: 1.15, d: 0.62 });        // tail fin
@@ -267,8 +277,15 @@ var CoralBakers = {
   heli: function (gl, colour) {
     var b = new Baker(); bakeHeliInto(b, colour);
     var rb = new Baker();
-    rb.panel(0x1c2126, { x: 0, y: 0, z: 0, w: 7.6, h: 0.07, d: 0.34 });
-    rb.panel(0x1c2126, { x: 0, y: 0, z: 0, w: 0.34, h: 0.07, d: 7.6 });
+    /* MICRO-FIX (defect 3): the old 0.07-thick / 0.34-wide blade pair
+       reads as a thin bar on a mast whenever the spin phase puts a
+       blade across the view (slot-1 capture). Thicker section
+       (0.16 x 0.52) plus a second pair crossed at 45 deg, so a
+       diagonal X-blade read survives at ANY rotor phase. */
+    rb.panel(0x1c2126, { x: 0, y: 0, z: 0, w: 7.6, h: 0.16, d: 0.52 });
+    rb.panel(0x1c2126, { x: 0, y: 0, z: 0, w: 0.52, h: 0.16, d: 7.6 });
+    rb.panel(0x1c2126, { x: 0, y: 0, z: 0, w: 7.6, h: 0.16, d: 0.52, ry: Math.PI / 4 });
+    rb.panel(0x1c2126, { x: 0, y: 0, z: 0, w: 7.6, h: 0.16, d: 0.52, ry: -Math.PI / 4 });
     rb.cylinder(0x333a42, { x: 0, y: 0, z: 0, r: 0.3, h: 0.16, seg: 8 });
     return { body: b.build(gl), rotor: rb.build(gl) };
   }
